@@ -32,6 +32,11 @@ RULES_NAME = "watch-rules.txt"
 # "exe|title", first match wins. watch-rules.txt in the vault is consulted first,
 # so a user line can reroute anything here.
 DEFAULT_RULES = (
+    ("codesignal", "interview-prep"),
+    ("leetcode", "leetcode"),
+    ("powerpnt.exe", "reading"),
+    ("powerpoint", "reading"),
+    ("canvas", "coursework"),
     ("leetcode.com", "leetcode"),
     ("greenhouse.io", "applications"),
     ("lever.co", "applications"),
@@ -155,6 +160,28 @@ def load_rules(vault):
     except OSError:
         print("warning: could not read %s" % path, file=sys.stderr)
         return []
+
+
+def add_rule(vault, pattern, category):
+    """Append one explicit custom rule without rewriting the user's rules file."""
+    pattern = pattern.strip().lower()
+    category = tracker.sanitize(category.strip().lower())
+    if not pattern or not category or "->" in pattern or "\n" in pattern or "\r" in pattern:
+        tracker.die("watch rule expects a non-empty PATTERN and CATEGORY")
+    path = os.path.join(vault, RULES_NAME)
+    existing = tracker.read_text(path) if os.path.isfile(path) else ""
+    if any(old_pattern == pattern for old_pattern, _old_category in parse_rules(existing)):
+        tracker.die("watch rule pattern already exists; edit %s to change it" % path)
+    separator = "" if not existing or existing.endswith(("\n", "\r")) else "\n"
+    tracker.write_text(path, existing + separator + "%s -> %s\n" % (pattern, category))
+    return path
+
+
+def rule_lines(vault):
+    user = load_rules(vault)
+    lines = ["user rules"] + (["  %s -> %s" % rule for rule in user] or ["  (none)"])
+    lines += ["built-in rules"] + ["  %s -> %s" % rule for rule in DEFAULT_RULES]
+    return lines
 
 
 def classify(exe, title, user_rules=()):
@@ -371,6 +398,16 @@ def report(vault, flushed):
 
 
 def cmd_watch(args):
+    rules_flag = getattr(args, "rules", False)
+    add_rule_args = getattr(args, "add_rule", None)
+    if rules_flag or add_rule_args:
+        vault = tracker.vault_path()
+        if add_rule_args:
+            path = add_rule(vault, *add_rule_args)
+            print("added rule to %s" % path)
+        if rules_flag:
+            tracker.print_lines(rule_lines(vault))
+        return
     if args.status:
         print("watcher: %s" % ("running" if watcher_running() else "not running"))
         rules_path = os.path.join(tracker.vault_path(), RULES_NAME)

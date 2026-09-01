@@ -10,6 +10,7 @@ No network, ever. Everything read here is a local file some other program alread
 wrote: Chromium's History, Firefox's places.sqlite.
 """
 
+import hashlib
 import os
 import re
 import shutil
@@ -76,6 +77,12 @@ DIFFICULTY_KEYS = {"e": "easy", "m": "medium", "h": "hard"}
 
 LEETCODE_RE = re.compile(
     r"^https?://(?:www\.)?leetcode\.com/problems/([a-zA-Z0-9-]+)", re.I
+)
+CODESIGNAL_RE = re.compile(
+    r"^https?://(?:app\.)?codesignal\.com/[^?#]*(?:assessment|test|interview)[^?#]*", re.I
+)
+CANVAS_RE = re.compile(
+    r"^https?://([a-z0-9.-]+\.instructure\.com)/courses/(\d+)/assignments/(\d+)", re.I
 )
 ATS_RULES = (
     # (regex, id prefix, company group, job group)
@@ -149,6 +156,28 @@ def classify(url, title):
             "extras": [],
             "ident": "lc-%s" % slug,
             "source": "leetcode",
+        }
+
+    m = CODESIGNAL_RE.match(url)
+    if m:
+        ident = hashlib.sha1(url.split("?", 1)[0].split("#", 1)[0].lower().encode("utf-8")).hexdigest()[:16]
+        return {
+            "type": "assessment",
+            "detail": clean_detail(title, "CodeSignal assessment"),
+            "extras": [("platform", "codesignal")],
+            "ident": "cs-%s" % ident,
+            "source": "codesignal",
+        }
+
+    m = CANVAS_RE.match(url)
+    if m:
+        host, course, assignment = m.groups()
+        return {
+            "type": "assignment",
+            "detail": clean_detail(title, "assignment %s" % assignment),
+            "extras": [("platform", "canvas")],
+            "ident": "canvas-%s-%s-%s" % (host.lower(), course, assignment),
+            "source": "canvas",
         }
 
     for pattern, prefix, company_group, job_group in ATS_RULES:

@@ -9,6 +9,10 @@ skipped, numbers never lie, and the data outlives the code. It does NOT mean web
 accounts, or dashboards-as-a-service — those add maintenance, and maintenance kills
 personal tools.
 
+Optional APIs, browser extensions, MCP services, dependencies and disposable local state
+are now allowed when they make capture meaningfully more accurate. They are adapters, not
+the product: Markdown stays the durable record and the offline CLI must keep working.
+
 ## The one principle everything hangs on
 
 **A decline in your chart must mean a decline in you, not a decline in your logging.**
@@ -208,6 +212,18 @@ don't split a session, sub-3-minute sessions are dropped, open sessions flush in
 at-login Task Scheduler job (pythonw, no console); still no server and no daemon of
 ours — the OS starts it, the OS stops it.
 
+## Phase 9 — the 20-second daily recap — **shipped**
+
+- **`t recap`** imports exact local Git facts, presents uncertain browser evidence for
+  confirmation, offers one optional learning line, and finishes with accomplishments and
+  measured time shown separately.
+- Git merge commits are distinct accomplishments. CodeSignal assessment and Canvas assignment
+  URLs join the browser allowlist, but remain proposals because a visit is not completion.
+- The window is now Recap / Log / Numbers, with recap discovery kept off the Tk thread.
+- Watch categories grow to coursework, reading and interview-prep, and custom rules can be
+  appended and inspected from the CLI.
+- Generated Dataview counts exclude measured time and use an exact inclusive 30-day window.
+
 ## Definition of "solid" (the quality bar per phase)
 
 1. **Data outlives the tool**: everything remains grep-able Markdown a human can read
@@ -215,8 +231,9 @@ ours — the OS starts it, the OS stops it.
 2. **Append-only forever**: the only mutations are appends and the explicit `undo`.
 3. **Tested invariants**: parser and inserter covered by `unittest`; run before each
    commit.
-4. **Stdlib only, and `tracker.py` under ~1500 lines.** The ceiling is enforced, not
-   aspirational: anything sizeable gets its own file with a thin subcommand in
+4. **A small offline core, and `tracker.py` under ~1500 lines.** Prefer stdlib, but an
+   optional integration may carry a well-justified dependency. The line ceiling is
+   enforced: anything sizeable gets its own file with a thin subcommand in
    `tracker.py`. `quickadd.py` (`t gui`), `suggest.py`, `bootstrap.py` (`t setup`),
    `review.py` and `label.py` are out; `tracker.py` keeps the CLI, the note I/O and
    the numbers engine, which is what every other file reuses. The
@@ -226,8 +243,8 @@ ours — the OS starts it, the OS stops it.
 
 ## What deliberately stays out
 
-Web UI (a local tkinter capture window is not one — see Phase 5), mobile app, database, cloud sync (the vault's own sync handles that), auth,
-notifications/nagging, manual time-tracking timers (start/stop buttons are the
-highest-friction feature in existence — Phase 8 measures time passively instead,
-and hand-typed hours stay rejected), and any ML beyond the existing `label`.
-Each of these is where personal tools go to die.
+A required hosted dashboard, authoritative database, and notification-heavy habit system
+stay out. Optional authenticated connectors, local indexes, browser/editor collectors and
+focused dependencies are allowed when they improve evidence quality. Manual start/stop
+timers remain a fallback, not the primary capture path; passive measurement and confirmed
+completion evidence are still preferred.

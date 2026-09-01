@@ -159,5 +159,9 @@ def cmd_label(_args):
     if reply.strip() != "y":
         return
 
-    for path, content, label, _rel in proposals:
-        tracker.write_text(path, insert_topic_field(content, label))
+    for path, _content, label, _rel in proposals:
+        with tracker.locked_note(path):
+            latest = tracker.read_text(path)
+            if "topic::" in latest:
+                continue
+            tracker.write_text(path, insert_topic_field(latest, label))

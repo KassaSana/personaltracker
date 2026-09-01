@@ -1,6 +1,6 @@
 # Personal Activity Tracker
 
-CLI that logs completed work into an Obsidian vault as plain Markdown. One file, Python stdlib only, no server or database.
+CLI that records completed work and measured attention into an Obsidian vault as plain Markdown. The offline core uses Python's standard library; optional integrations may be added without replacing the Markdown record.
 
 ## Setup
 
@@ -62,13 +62,14 @@ t dash  [--weeks N]
 t sync   [--repo PATH ...] [--root DIR ...] [--days N] [--author EMAIL] [--dry-run] [--no-dash]
 t review [--week YYYY-MM-DD] [--print]
 t suggest [--days N] [--yes] [--dry-run]
+t recap [--date YYYY-MM-DD] [--dry-run]
 t watch  [--interval SEC] [--idle SEC] [--status]
 t label
 t gui
 t complete [command]   # completion words, for the shell
 ```
 
-Types: `commit`, `pull_request`, `assignment`, `lecture`, `slides`, `application`, `resume`, `study`, `leetcode`, `design`, `interview`.
+Types: `commit`, `pull_request`, `assignment`, `lecture`, `slides`, `application`, `resume`, `study`, `leetcode`, `design`, `interview`, `merge`, `assessment`, `learning`.
 
 `--topic` and `--duration` (integer minutes) are only valid with `study`.
 
@@ -99,9 +100,9 @@ pythonw quickadd.py        # no console window at all
 
 Three tabs, Ctrl+Tab between them:
 
+- **Recap** — imports local Git facts, lets you confirm browser evidence, and offers one optional learning line. It opens first.
 - **Log** — type, detail, extras (and topic/duration, enabled only for `study`), the last eight events of the day, and an Undo button. Enter logs, Esc closes.
 - **Numbers** — the last six weeks with bars and the trend column, study minutes by topic, the application pipeline, and streaks. Same engine as `t stats --weeks N`, so the window and the terminal can never disagree. It recomputes when you open the tab and after anything you log, not on every keystroke. A button there writes `Dashboard.md` without a terminal.
-- **Suggest** — `t suggest` with checkboxes instead of a prompt. Scan N days, select the rows you actually finished, optionally set a difficulty for the picked leetcode rows, and log them. The scan runs off the main thread so the window stays responsive while it reads your history.
 
 Tkinter, so it needs nothing that isn't already in the standard library.
 
@@ -186,17 +187,31 @@ Picked leetcode rows then ask for a difficulty (`e`/`m`/`h`, Enter to skip), bec
 
 **Where it looks.** Chromium history (Chrome, Edge, Brave, Vivaldi, Opera) and Firefox's `places.sqlite`, via stdlib `sqlite3`. The file is copied before reading, so it works while the browser is open and never touches your original. `TRACKER_BROWSERS` overrides discovery with an explicit `;`-separated list of history files.
 
-**What it can see** is an allowlist, and that's the privacy story: `leetcode.com/problems/...`, plus Greenhouse, Lever, Ashby, SmartRecruiters and Workday job URLs. Every other page in your history is invisible to it — it cannot log what it cannot match, so it never reads your mail, your bank or anything else into the vault.
+**What it can see** is an allowlist, and that's the privacy story: LeetCode problems, CodeSignal assessment/interview pages, Canvas assignment pages, plus Greenhouse, Lever, Ashby, SmartRecruiters and Workday job URLs. Every other page in your history is invisible to it — it cannot log what it cannot match, so it never reads your mail, your bank or anything else into the vault.
 
-**What it can't know.** History proves a page was *opened*, never that a problem was solved or an application submitted. That's exactly why it proposes instead of writing, and why `--yes` is for when you've already looked. Application *stages* (OA, phone, onsite, offer) arrive by email, which is out of reach under the no-network rule — those stay manual, and they're the ones you remember anyway.
+**What it can't know.** History proves a page was *opened*, never that a problem was solved, an application submitted, or an assessment completed. That's exactly why local-history evidence is proposed instead of written. Optional authenticated integrations may later provide stronger evidence; ambiguous visits still require confirmation.
 
 Proposals carry `id::` and `src:: suggest`, so re-running is safe and you can always audit where a number came from. Commits don't appear here: `t sync` imports them exactly, and a commit needs no confirmation because it's already a completion.
+
+## The 20-second daily check — `t recap`
+
+```
+t recap                         # today's working day
+t recap --date 2026-09-01       # catch up on another day
+t recap --dry-run               # discover and print, write nothing
+```
+
+Recap keeps three meanings separate. Local commits and merge commits are exact evidence and import automatically. LeetCode, CodeSignal assessments, supported job boards and Canvas assignment pages are browser evidence, so you select only what you completed. Foreground time stays measured attention and never becomes a completion. Finally, one optional prompt records `type:: learning` when there is something worth remembering.
+
+Missing Git repositories or browser history do not make recap fail; it summarizes whatever evidence exists. The GUI's Recap tab runs the same engine off the Tk thread.
 
 ## Measuring time — `t watch`
 
 ```
 t watch                    # watch in this terminal, print sessions as they close
 t watch --status           # is a watcher running? which rules file?
+t watch --rules            # show custom rules followed by built-ins
+t watch --add-rule kicad hardware-project
 t setup --watch-task       # start it invisibly at every login (Task Scheduler)
 t setup --watch-task --remove
 ```
@@ -216,8 +231,8 @@ program names are matched in memory and discarded — nothing else reaches a vau
 that syncs. Classification comes from `<VAULT_PATH>/watch-rules.txt`
 (`pattern -> category`, first match wins, seeded by setup with the defaults as
 comments) layered over built-in rules for the usual suspects (IDEs and terminals →
-`project`, leetcode.com → `leetcode`, job boards → `applications`, Canvas/Word/PDF →
-`assignment`, Obsidian → `review`). Anything unmatched is `other` — counted, so the
+`project`, LeetCode → `leetcode`, job boards → `applications`, Canvas → `coursework`,
+PowerPoint → `reading`, CodeSignal → `interview-prep`, Obsidian → `review`). Anything unmatched is `other` — counted, so the
 totals stay honest.
 
 Session rules, all tested: a sub-2-minute alt-tab neither splits a session nor

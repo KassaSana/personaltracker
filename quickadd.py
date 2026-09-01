@@ -20,6 +20,7 @@ from tkinter import messagebox, ttk
 from argparse import Namespace
 from datetime import datetime, timedelta
 
+import recap
 import suggest
 import tracker
 import watch
@@ -186,7 +187,7 @@ def apply_suggestions(vault, picked, difficulty=""):
 
 
 class QuickAdd(ttk.Frame):
-    """Two tabs and nothing else: Log is why you opened it, Numbers is why you log."""
+    """Recap first, with manual logging and the shared numbers engine beside it."""
 
     def __init__(self, master, vault):
         super().__init__(master, padding=8)
@@ -204,24 +205,28 @@ class QuickAdd(ttk.Frame):
         self.tabs = ttk.Notebook(self)
         self.tabs.grid(row=0, column=0, sticky="nsew")
         tab_frames = [ttk.Frame(self.tabs, padding=8) for _ in range(3)]
-        for frame, label in zip(tab_frames, ("Log", "Numbers", "Suggest")):
+        for frame, label in zip(tab_frames, ("Recap", "Log", "Numbers")):
             self.tabs.add(frame, text=label)
         self.tabs.bind("<<NotebookTabChanged>>", lambda _e: self.refresh_numbers())
 
-        self.build_log_tab(tab_frames[0])
-        self.build_numbers_tab(tab_frames[1])
-        self.build_suggest_tab(tab_frames[2])
+        self.build_suggest_tab(tab_frames[0])
+        self.build_log_tab(tab_frames[1])
+        self.build_numbers_tab(tab_frames[2])
 
-        master.bind("<Return>", lambda _e: self.on_log())
-        master.bind("<KP_Enter>", lambda _e: self.on_log())
+        master.bind("<Return>", self.on_enter)
+        master.bind("<KP_Enter>", self.on_enter)
         master.bind("<Escape>", lambda _e: master.destroy())
         master.bind("<Control-Tab>", lambda _e: self.next_tab())
 
         self.sync_study_fields()
         self.refresh()
-        self.fields["detail"].focus_set()
+        self.on_scan()
 
     # -- layout --
+
+    def on_enter(self, _event=None):
+        if self.tabs.index("current") == 1:
+            self.on_log()
 
     def build_log_tab(self, parent):
         parent.columnconfigure(3, weight=1)
@@ -285,35 +290,42 @@ class QuickAdd(ttk.Frame):
 
     def build_suggest_tab(self, parent):
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(2, weight=1)
+        parent.rowconfigure(3, weight=1)
         self.proposals = []
 
         controls = ttk.Frame(parent)
         controls.grid(row=0, column=0, sticky="ew")
-        ttk.Label(controls, text="scan the last").grid(row=0, column=0)
+        ttk.Label(controls, text="recap evidence from the last").grid(row=0, column=0)
         self.days_var = tk.StringVar(value=str(suggest.DEFAULT_DAYS))
         ttk.Spinbox(controls, from_=1, to=90, width=4, textvariable=self.days_var).grid(
             row=0, column=1, padx=4
         )
         ttk.Label(controls, text="days of browser history").grid(row=0, column=2)
-        self.scan_button = ttk.Button(controls, text="Scan", command=self.on_scan)
+        self.scan_button = ttk.Button(controls, text="Refresh", command=self.on_scan)
         self.scan_button.grid(row=0, column=3, padx=(12, 0))
 
         ttk.Label(
             parent,
             # The same warning the CLI prints, for the same reason.
-            text="A page you opened is not a problem you solved or a job you applied to.",
+            text="Git facts import automatically. Select browser evidence only when completed.",
             foreground="grey",
         ).grid(row=1, column=0, sticky="w", pady=(8, 4))
+
+        self.recap_summary = tk.Text(
+            parent, height=7, font=tkfont.nametofont("TkFixedFont"), wrap="none",
+            state="disabled", borderwidth=0,
+            background=parent.winfo_toplevel().cget("background"),
+        )
+        self.recap_summary.grid(row=2, column=0, sticky="ew", pady=(4, 8))
 
         self.suggest_list = tk.Listbox(
             parent, selectmode="extended", height=10,
             font=tkfont.nametofont("TkFixedFont"), activestyle="none",
         )
-        self.suggest_list.grid(row=2, column=0, sticky="nsew")
+        self.suggest_list.grid(row=3, column=0, sticky="nsew")
 
         actions = ttk.Frame(parent)
-        actions.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        actions.grid(row=4, column=0, sticky="ew", pady=(8, 0))
         actions.columnconfigure(3, weight=1)
         ttk.Label(actions, text="difficulty for picked leetcode").grid(row=0, column=0)
         self.diff_var = tk.StringVar(value="")
@@ -321,7 +333,12 @@ class QuickAdd(ttk.Frame):
             actions, textvariable=self.diff_var, width=8, state="readonly",
             values=["", "easy", "medium", "hard"],
         ).grid(row=0, column=1, padx=(4, 0))
-        ttk.Button(actions, text="Log selected", command=self.on_apply).grid(row=0, column=4)
+        ttk.Label(actions, text="what did you learn? (optional)").grid(row=1, column=0, pady=(8, 0))
+        self.learning_var = tk.StringVar(value="")
+        ttk.Entry(actions, textvariable=self.learning_var, width=36).grid(
+            row=1, column=1, columnspan=3, sticky="ew", padx=(4, 8), pady=(8, 0)
+        )
+        ttk.Button(actions, text="Finish recap", command=self.on_apply).grid(row=0, column=4, rowspan=2)
 
     def entry(self, parent, row, column, width=None, columnspan=1):
         widget = ttk.Entry(parent, width=width) if width else ttk.Entry(parent)
@@ -431,34 +448,50 @@ class QuickAdd(ttk.Frame):
 
         def work():
             try:
-                results.put((scan_suggestions(self.vault, days), None))
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    added, _skipped, warning = recap.sync_day(
+                        self.vault, tracker.working_date(), dry_run=False
+                    )
+                    if added:
+                        tracker.write_generated_notes(self.vault)
+                results.put((scan_suggestions(self.vault, days), None, added, warning))
             except Exception as exc:  # a scan must never take the window down
-                results.put(([], str(exc)))
+                results.put(([], str(exc), 0, ""))
 
         threading.Thread(target=work, daemon=True).start()
         self.poll_scan(results)
 
     def poll_scan(self, results):
         try:
-            found, error = results.get_nowait()
+            found, error, imported, warning = results.get_nowait()
         except queue.Empty:
             self.after(100, lambda: self.poll_scan(results))
             return
-        self.scan_done(found, error)
+        self.scan_done(found, error, imported, warning)
 
-    def scan_done(self, found, error):
+    def scan_done(self, found, error, imported=0, warning=""):
         self.scan_button.configure(state="normal")
         self.proposals = found
+        self.recap_summary.configure(state="normal")
+        self.recap_summary.delete("1.0", "end")
+        self.recap_summary.insert(
+            "1.0", "\n".join(recap.summary_lines(
+                recap.events_for_day(self.vault, tracker.working_date())
+            ))
+        )
+        self.recap_summary.configure(state="disabled")
         if error:
             self.say(error, ok=False)
             return
         if not found:
-            self.say("nothing new to propose")
+            self.say("imported %d Git event(s); nothing to confirm%s" % (
+                imported, ("; " + warning) if warning else ""
+            ))
             self.suggest_list.insert("end", "(nothing new)")
             return
         for line in suggest.render(found)[1:]:  # drop the header row
             self.suggest_list.insert("end", line)
-        self.say("%d proposal(s) -- select the ones you actually finished" % len(found))
+        self.say("imported %d Git event(s); %d proposal(s) to confirm" % (imported, len(found)))
 
     def on_apply(self):
         picked = [
@@ -466,10 +499,22 @@ class QuickAdd(ttk.Frame):
             for i in self.suggest_list.curselection()
             if i < len(self.proposals)
         ]
-        ok, message = apply_suggestions(self.vault, picked, self.diff_var.get())
-        self.say(message, ok=ok)
-        if not ok:
+        learning = self.learning_var.get()
+        ok, message = apply_suggestions(self.vault, picked, self.diff_var.get()) if picked else (True, "logged 0 event(s)")
+        try:
+            learned, _skipped = recap.write_learning(
+                self.vault, tracker.working_date(), learning
+            )
+        except OSError as exc:
+            self.say(str(exc), ok=False)
             return
+        if not picked and not learned:
+            self.say("nothing selected and no learning note", ok=False)
+            return
+        with contextlib.redirect_stdout(io.StringIO()):
+            tracker.write_generated_notes(self.vault)
+        self.learning_var.set("")
+        self.say("%s; logged %d learning note(s)" % (message, learned), ok=ok)
         # Applied rows are logged now, so drop them rather than offering them twice.
         for index in sorted(self.suggest_list.curselection(), reverse=True):
             self.suggest_list.delete(index)

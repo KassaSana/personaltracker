@@ -8,13 +8,17 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from argparse import Namespace
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 
 import label
+import locking
+import recap
 import review
+import suggest
 import tracker
 import watch
 
@@ -103,6 +107,31 @@ class TestAppendOnly(VaultTestCase):
         with self.assertRaises(SystemExit):
             self.run_cli("track", "nonsense")
         self.assertFalse(os.path.exists(os.path.join(self.vault, "daily")))
+
+    def test_note_lock_serializes_two_writers(self):
+        path = self.daily("2026-08-31")
+        entered, release, second_entered = threading.Event(), threading.Event(), threading.Event()
+
+        def first():
+            with locking.note_lock(path):
+                entered.set()
+                release.wait(2)
+
+        def second():
+            entered.wait(2)
+            with locking.note_lock(path):
+                second_entered.set()
+
+        one = threading.Thread(target=first)
+        two = threading.Thread(target=second)
+        one.start()
+        two.start()
+        self.assertTrue(entered.wait(1))
+        self.assertFalse(second_entered.wait(0.05))
+        release.set()
+        one.join(2)
+        two.join(2)
+        self.assertTrue(second_entered.is_set())
 
 
 class TestDailyTemplate(VaultTestCase):
@@ -410,6 +439,12 @@ class TestImplicitTrack(VaultTestCase):
 
 
 class TestNumbers(VaultTestCase):
+    def test_generated_stats_use_exact_30_days_and_exclude_time(self):
+        body = tracker.stats_markdown()
+        self.assertIn("dur(29 days)", body)
+        self.assertNotIn("dur(30 days)", body)
+        self.assertIn('t.type != "time"', body)
+
     def seed(self, day, *lines):
         body = "".join("- [x] %s\n" % ln for ln in lines)
         self.write_daily(day, "# %s\n\n## Log\n%s" % (day, body))
@@ -684,6 +719,13 @@ class TestSync(VaultTestCase):
         self.assertEqual(fields["id"], "a" * 8)
         self.assertEqual(fields["src"], "sync")
         self.assertEqual(fields["repo"], "repo")
+
+    def test_merge_commits_are_a_distinct_completion(self):
+        self.fake_git(git_log_output((
+            "a" * 40, "2026-08-31T14:22:00", "merge feature", "b" * 40 + " " + "c" * 40
+        )))
+        self.sync("--days", "3650")
+        self.assertIn("type:: merge", self.read_daily("2026-08-31"))
 
     def test_04h_rollover_applies_to_commits(self):
         self.fake_git(git_log_output((("a" * 40), "2026-09-01T01:30:00", "late night")))
@@ -1280,6 +1322,22 @@ class TestSuggest(VaultTestCase):
                 if ident:
                     self.assertEqual(got["ident"], ident)
 
+    def test_codesignal_assessment_is_confirmation_only_evidence(self):
+        got = self.suggest.classify(
+            "https://app.codesignal.com/assessment/company-test-123", "General Coding Assessment"
+        )
+        self.assertEqual(got["type"], "assessment")
+        self.assertIn(("platform", "codesignal"), got["extras"])
+        self.assertTrue(got["ident"].startswith("cs-"))
+
+    def test_canvas_assignment_is_confirmation_only_evidence(self):
+        got = self.suggest.classify(
+            "https://example.instructure.com/courses/42/assignments/99", "Lab 4 | Canvas"
+        )
+        self.assertEqual(got["type"], "assignment")
+        self.assertIn(("platform", "canvas"), got["extras"])
+        self.assertEqual(got["ident"], "canvas-example.instructure.com-42-99")
+
     def test_everything_else_is_ignored(self):
         # The allowlist is the privacy story: history it cannot log, it cannot see.
         for url in (
@@ -1500,6 +1558,42 @@ class TestSuggest(VaultTestCase):
         self.assertEqual(parse("nonsense", 3), [])   # never guesses
 
 
+class TestRecap(VaultTestCase):
+    def test_learning_is_sanitized_and_idempotent(self):
+        day = date(2026, 8, 31)
+        added, skipped = recap.write_learning(self.vault, day, "locks | avoid lost writes")
+        self.assertEqual((added, skipped), (1, 0))
+        added, skipped = recap.write_learning(self.vault, day, "locks | avoid lost writes")
+        self.assertEqual((added, skipped), (0, 1))
+        body = self.read_daily("2026-08-31")
+        self.assertIn("type:: learning", body)
+        self.assertIn("detail:: locks   avoid lost writes", body)
+        self.assertIn("src:: recap", body)
+
+    def test_summary_keeps_time_separate_from_accomplishments(self):
+        events = [
+            {"type": "commit", "_date": date(2026, 8, 31)},
+            {"type": "time", "detail": "project", "duration": "30", "_date": date(2026, 8, 31)},
+        ]
+        body = "\n".join(recap.summary_lines(events))
+        self.assertIn("commit", body)
+        self.assertIn("project", body)
+        self.assertNotIn("time           1", body)
+
+    def test_proposals_are_limited_to_the_selected_working_day(self):
+        day = date(2026, 8, 31)
+        old = suggest.gather
+        suggest.gather = lambda _since, _databases=None: [
+            {"type": "leetcode", "detail": "one", "extras": [], "ident": "one",
+             "source": "leetcode", "when": datetime(2026, 8, 31, 12), "day": day},
+            {"type": "leetcode", "detail": "two", "extras": [], "ident": "two",
+             "source": "leetcode", "when": datetime(2026, 9, 1, 12), "day": day + timedelta(days=1)},
+        ]
+        self.addCleanup(setattr, suggest, "gather", old)
+        got = recap.proposals_for_day(self.vault, day, [])
+        self.assertEqual([p["detail"] for p in got], ["one"])
+
+
 class TestWatch(VaultTestCase):
     """watch.py through its pure parts only -- no Windows API in the suite,
     the same rule the GUI tests follow."""
@@ -1530,6 +1624,17 @@ class TestWatch(VaultTestCase):
         self.assertEqual(rules, [("leetcode.com", "study"), ("blender", "project")])
         self.assertEqual(watch.classify("chrome.exe", "LeetCode.com", rules), "study")
         self.assertEqual(watch.classify("blender.exe", "donut", rules), "project")
+
+    def test_reading_coursework_and_assessment_defaults(self):
+        self.assertEqual(watch.classify("POWERPNT.EXE", "deck", ()), "reading")
+        self.assertEqual(watch.classify("chrome.exe", "Course - Canvas", ()), "coursework")
+        self.assertEqual(watch.classify("chrome.exe", "CodeSignal Assessment", ()), "interview-prep")
+
+    def test_add_rule_appends_once(self):
+        path = watch.add_rule(self.vault, "KiCad", "hardware-project")
+        self.assertIn("kicad -> hardware-project", tracker.read_text(path))
+        with self.assertRaises(SystemExit):
+            watch.add_rule(self.vault, "kicad", "other")
 
     def test_session_basic_and_short_dropped(self):
         sessions = watch.Sessions()

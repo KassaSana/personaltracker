@@ -27,11 +27,14 @@ VALID_TYPES = (
     "leetcode",
     "design",
     "interview",
+    "merge",
+    "assessment",
+    "learning",
 )
 
 SUBCOMMANDS = (
     "track", "today", "undo", "stats", "week", "month", "dash", "sync", "review",
-    "label", "suggest", "gui", "setup", "watch", "complete",
+    "label", "suggest", "recap", "gui", "setup", "watch", "complete",
 )
 
 # `time` lines are written by `t watch` only: measured attention, not completion.
@@ -56,7 +59,7 @@ MIN_LOGGED_DAYS = 3
 
 # sync: one record per line, fields split by a byte no commit subject can contain.
 GIT_FIELD_SEP = "\x1f"
-GIT_LOG_FORMAT = GIT_FIELD_SEP.join(("%H", "%aI", "%s"))
+GIT_LOG_FORMAT = GIT_FIELD_SEP.join(("%H", "%aI", "%s", "%P"))
 SHORT_SHA_LEN = 8
 
 # Bars in the generated notes. Fixed width so one big week cannot stretch the table,
@@ -157,6 +160,8 @@ def write_text(path, content):
         f.write(content)
 
 
+def locked_note(path):
+    return sibling_module("locking").note_lock(path)
 # ---- log-line format -------------------------------------------------------
 
 
@@ -297,12 +302,10 @@ def cmd_track(args):
 
     path = daily_path(vault, day)
 
-    if os.path.exists(path):
-        content = read_text(path)
-    else:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        content = new_daily_content(vault, day)
-    write_text(path, insert_under_log(content, log_line))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with locked_note(path):
+        content = read_text(path) if os.path.exists(path) else new_daily_content(vault, day)
+        write_text(path, insert_under_log(content, log_line))
 
 
 def cmd_today(args):
@@ -384,7 +387,13 @@ def cmd_undo(args):
         if reply.strip() != "y":
             return
 
-    write_text(path, content[:line_start] + content[cut_end:])
+    with locked_note(path):
+        latest = read_text(path)
+        latest_found = last_tool_line(latest)
+        if latest_found is None or latest_found[2] != text:
+            die("daily note changed while undo was waiting; run undo again")
+        latest_start, latest_end, _latest_text = latest_found
+        write_text(path, latest[:latest_start] + latest[latest_end:])
 
 
 # ---- event loading & parsing -----------------------------------------------
@@ -719,9 +728,10 @@ def stats_markdown():
         "```dataview\n"
         "TABLE length(rows) AS Count\n"
         'FROM "daily"\n'
-        "WHERE file.day >= date(today) - dur(30 days)\n"
+        "WHERE file.day >= date(today) - dur(29 days)\n"
         "FLATTEN file.tasks AS t\n"
         "WHERE t.completed\n"
+        'WHERE t.type != "time"\n'
         "GROUP BY t.type\n"
         "SORT Count DESC\n"
         "```\n"
@@ -731,7 +741,7 @@ def stats_markdown():
         "```dataview\n"
         "TABLE sum(rows.t.duration) AS Minutes\n"
         'FROM "daily"\n'
-        "WHERE file.day >= date(today) - dur(30 days)\n"
+        "WHERE file.day >= date(today) - dur(29 days)\n"
         "FLATTEN file.tasks AS t\n"
         'WHERE t.completed AND t.type = "study"\n'
         "GROUP BY t.topic\n"
@@ -838,7 +848,7 @@ def dashboard_markdown(events, buckets, today):
         "```dataview",
         "TABLE sum(rows.t.duration) AS Minutes",
         'FROM "daily"',
-        "WHERE file.day >= date(today) - dur(30 days)",
+        "WHERE file.day >= date(today) - dur(29 days)",
         "FLATTEN file.tasks AS t",
         'WHERE t.completed AND t.type = "study"',
         "GROUP BY t.topic",
@@ -1026,7 +1036,7 @@ def parse_git_date(text):
 
 
 def parse_git_log(text):
-    """Parse GIT_LOG_FORMAT records into [{sha, when, subject}].
+    """Parse GIT_LOG_FORMAT records into [{sha, when, subject, parents}].
 
     Tolerant like every other reader here: a record missing fields or carrying an
     unreadable date is skipped, never fatal.
@@ -1034,13 +1044,17 @@ def parse_git_log(text):
     commits = []
     for raw in (text or "").splitlines():
         parts = raw.rstrip("\r").split(GIT_FIELD_SEP)
-        if len(parts) != 3:
+        if len(parts) not in (3, 4):
             continue
-        sha, when_raw, subject = parts
+        sha, when_raw, subject = parts[:3]
+        parents = parts[3].split() if len(parts) == 4 else []
         when = parse_git_date(when_raw)
         if not sha.strip() or when is None:
             continue
-        commits.append({"sha": sha.strip(), "when": when, "subject": sanitize(subject)})
+        commits.append({
+            "sha": sha.strip(), "when": when, "subject": sanitize(subject),
+            "parents": parents,
+        })
     return commits
 
 
@@ -1048,7 +1062,6 @@ def git_commits(repo, since, author):
     """Commits by `author` since `since`, or None if the repo could not be read."""
     argv = [
         "log",
-        "--no-merges",
         "--since",
         since.isoformat(),
         "--pretty=format:" + GIT_LOG_FORMAT,
@@ -1133,8 +1146,9 @@ def collect_commit_lines(repos, since, author):
         for commit in commits:
             short = commit["sha"][:SHORT_SHA_LEN]
             extras = [("repo", name), ("id", short), ("src", "sync")]
+            event_type = "merge" if len(commit.get("parents", ())) >= 2 else "commit"
             line = format_log_line(
-                "commit", commit["when"], commit["subject"], None, None, extras
+                event_type, commit["when"], commit["subject"], None, None, extras
             )
             by_day[working_date(commit["when"])].append((commit["when"], short, line))
     return by_day, scanned
@@ -1145,32 +1159,29 @@ def append_commit_lines(vault, by_day, dry_run):
     added = skipped = 0
     for day in sorted(by_day):
         path = daily_path(vault, day)
-        content = read_text(path) if os.path.isfile(path) else None
-        seen = existing_ids(content) if content is not None else set()
-
-        fresh = []
-        for _when, ident, line in sorted(by_day[day]):
-            if ident in seen:
-                skipped += 1
+        with locked_note(path):
+            content = read_text(path) if os.path.isfile(path) else None
+            seen = existing_ids(content) if content is not None else set()
+            fresh = []
+            for _when, ident, line in sorted(by_day[day]):
+                if ident in seen:
+                    skipped += 1
+                    continue
+                seen.add(ident)
+                fresh.append(line)
+            if not fresh:
                 continue
-            seen.add(ident)
-            fresh.append(line)
-        if not fresh:
-            continue
-
-        added += len(fresh)
-        if dry_run:
-            print("%s  +%d" % (day.isoformat(), len(fresh)))
-            for line in fresh:
-                print("  %s" % line)
-            continue
-
-        if content is None:
+            added += len(fresh)
+            if dry_run:
+                print("%s  +%d" % (day.isoformat(), len(fresh)))
+                for line in fresh:
+                    print("  %s" % line)
+                continue
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            content = new_daily_content(vault, day)
-        for line in fresh:
-            content = insert_under_log(content, line)
-        write_text(path, content)
+            content = content if content is not None else new_daily_content(vault, day)
+            for line in fresh:
+                content = insert_under_log(content, line)
+            write_text(path, content)
     return added, skipped
 
 
@@ -1227,6 +1238,11 @@ def cmd_gui(_args):
 def cmd_suggest(args):
     """Propose events from local evidence. The reader lives in suggest.py."""
     sibling_module("suggest").cmd_suggest(args)
+
+
+def cmd_recap(args):
+    """Run the short evidence/confirmation/learning daily review."""
+    sibling_module("recap").cmd_recap(args)
 
 
 def cmd_review(args):
@@ -1395,6 +1411,11 @@ def build_parser():
     suggest_p.add_argument("--dry-run", action="store_true", help="Show proposals, write nothing")
     suggest_p.set_defaults(func=cmd_suggest)
 
+    recap_p = sub.add_parser("recap", help="Import facts, confirm suggestions, summarize today")
+    recap_p.add_argument("--date", metavar="D", help="Recap another working day")
+    recap_p.add_argument("--dry-run", action="store_true", help="Discover and print; write nothing")
+    recap_p.set_defaults(func=cmd_recap)
+
     setup_p = sub.add_parser("setup", help="Create a vault and print the profile block")
     setup_p.add_argument("path", nargs="?", help="Where the vault goes (default: $VAULT_PATH)")
     setup_p.add_argument(
@@ -1415,6 +1436,8 @@ def build_parser():
     watch_p.add_argument("--interval", metavar="SEC", type=int, default=5, help="Sample every SEC seconds")
     watch_p.add_argument("--idle", metavar="SEC", type=int, default=180, help="Stop the clock after SEC seconds without input")
     watch_p.add_argument("--status", action="store_true", help="Report whether a watcher is running")
+    watch_p.add_argument("--rules", action="store_true", help="Print effective classification rules")
+    watch_p.add_argument("--add-rule", nargs=2, metavar=("PATTERN", "CATEGORY"), help="Append one custom rule")
     watch_p.set_defaults(func=cmd_watch)
 
     complete_p = sub.add_parser("complete", help="List completion words for the shell")
