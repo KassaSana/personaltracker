@@ -17,13 +17,16 @@ A personal CLI tool that logs work events into an Obsidian vault as plain Markdo
 - **Append-only writes to daily notes**: never rewrite, reflow, or reorder existing content. When inserting under `## Log`, every existing byte before and after the insertion point must survive unchanged.
 - `label` must show its proposed changes and wait for explicit `y` confirmation before writing anything. It sends note **title and headings only** to the model, never the body.
 - `sync` is the only importer, and it reads **local `git log` only**. Its dedupe key `id::` lives in the Markdown like everything else; re-running must always be safe. The **GitHub API, `gh`, Canvas and LeetCode ingestion stay out of scope** — do not build, stub, or scaffold for them until `FRICTION.md` shows they were missed.
-- A review note (`reviews/YYYY-Www.md`) is written once and never regenerated; it holds the user's handwriting. Only `Stats.md` and `Dashboard.md` are overwritable.
+- A review note (`reviews/YYYY-Www.md`) is written once and never regenerated; it holds the user's handwriting. Only `Stats.md` and `Dashboard.md` are overwritable, and only `t dash` may overwrite them — a command that reads numbers must never write to the vault as a side effect.
 
 ## Structure
 
-- `tracker.py` — everything. One file, argparse subcommands `track` / `today` / `undo` / `stats` / `sync` / `review` / `label`. Resist the urge to split into a package; a single file is the maintenance-free shape here. Navigate it by the `# ---- section ----` banners, and add a new command as a new banner section plus one `sub.add_parser` block.
-- `test_tracker.py` — stdlib `unittest`. `sync` is tested against a fake `run_git` plus one real-git integration test that skips when `git` is absent.
-- `README.md` — short usage doc (setup `VAULT_PATH`, the three commands, the 04:00 rollover rule).
+- `tracker.py` — the CLI, and every write path. One file, argparse subcommands `track` / `today` / `undo` / `stats` / `week` / `month` / `dash` / `sync` / `review` / `label` / `gui` / `complete`. Resist the urge to split into a package; a single file is the maintenance-free shape here. Navigate it by the `# ---- section ----` banners, and add a new command as a new banner section plus one `sub.add_parser` block. It sits near the roadmap's ~1500-line ceiling: anything sizeable goes in its own file with a thin subcommand here, the way `gui` does.
+- `quickadd.py` — the tkinter quick-add window behind `t gui`. It owns no line format and no file handling: every write goes through `tracker.cmd_track` / `tracker.cmd_undo`, with output and `SystemExit` trapped so `die()` reports in the window instead of killing it. Keep it that way.
+- `completion.ps1` — PowerShell argument completer for `t`. Its words come from `t complete`, which walks the parser; never hardcode a second list.
+- `templates/Daily.md` — example vault template. A copy at `<VAULT_PATH>/templates/Daily.md` seeds notes the tool creates (`{{date}}` substituted) and carries unticked `- [ ] type:: ...` boxes; ticking one in Obsidian is a logged event, because the parser has always counted only `- [x]`.
+- `test_tracker.py` — stdlib `unittest`. `sync` is tested against a fake `run_git` plus one real-git integration test that skips when `git` is absent. The GUI is tested through its pure functions only — no Tk in the test suite.
+- `README.md` — short usage doc (setup `VAULT_PATH`, the commands, the 04:00 rollover rule).
 - `.gitignore` — minimal (`__pycache__/`, `.venv/`).
 
 ## Style

@@ -52,6 +52,8 @@ t dash  [--weeks N]
 t sync   [--repo PATH ...] [--root DIR ...] [--days N] [--author EMAIL] [--dry-run]
 t review [--week YYYY-MM-DD] [--print]
 t label
+t gui
+t complete [command]   # completion words, for the shell
 ```
 
 Types: `commit`, `pull_request`, `assignment`, `lecture`, `slides`, `application`, `resume`, `study`, `leetcode`, `design`, `interview`.
@@ -75,6 +77,19 @@ Copy `templates/Daily.md` into your vault at `<VAULT_PATH>/templates/Daily.md`. 
 
 - **New daily notes are seeded from it.** When `track` or `sync` has to create a note, it uses the template and substitutes `{{date}}` — Obsidian's own placeholder, so the same file works with Obsidian's Templates plugin. Without a template the tool writes its usual two-line skeleton.
 - **Ticking a box is logging.** The template's `## Log` section holds unticked lines like `- [ ] type:: leetcode | diff:: easy`. The parser only counts `- [x]`, so an unticked box is nothing and a ticked one is an event — no terminal, and it works from Obsidian mobile. Edit the boxes to match the week you actually have.
+
+### The quick-add window — `t gui`
+
+```
+t gui                      # from a terminal
+pythonw quickadd.py        # no console window at all
+```
+
+One window: type, detail, extras (and topic/duration, enabled only for `study`), the last eight events of the day, and an Undo button. Enter logs, Esc closes. Tkinter, so it needs nothing that isn't already in the standard library.
+
+It owns no format and touches no file — every write goes through the same `track` and `undo` the CLI uses, so it cannot invent a line shape the parser won't read back.
+
+For the case this exists for — logging at 1am without opening a terminal — bind it to a key: make a Windows shortcut to `pythonw.exe "D:\Personal Projects\personaltracker\quickadd.py"`, put it on the desktop or Start menu, and set a Shortcut key in its Properties.
 
 A ticked box carries no `when::`, which is honest: the tool doesn't know the time, and the filename is what decides the day anyway. `t undo` never touches those lines — it only removes what the CLI itself wrote.
 

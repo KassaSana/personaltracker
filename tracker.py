@@ -31,7 +31,7 @@ VALID_TYPES = (
 
 SUBCOMMANDS = (
     "track", "today", "undo", "stats", "week", "month", "dash", "sync", "review",
-    "label", "complete",
+    "label", "gui", "complete",
 )
 
 # `t week` is `t stats 7` under a name you actually reach for.
@@ -1378,6 +1378,19 @@ def cmd_label(_args):
 # ---- CLI -------------------------------------------------------------------
 
 
+def cmd_gui(_args):
+    """Open the quick-add window. The window itself lives in quickadd.py: this file
+    stays the CLI, and tkinter is imported only if you ask for it."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        import quickadd
+    except ImportError as exc:
+        die("could not open the window: %s" % exc)
+    sys.exit(quickadd.main())
+
+
 def cmd_complete(args):
     """Words the shell may offer after `t`. Derived from the parser, never a
     second list to keep in sync: a new flag is completable the day it exists."""
@@ -1394,6 +1407,7 @@ def cmd_complete(args):
 # Bare `t`: the six lines worth knowing, in the order you reach for them.
 CHEATSHEET = (
     ("log", "t <type> [detail...] [--x k=v]", "t leetcode two-sum --x diff=easy"),
+    ("window", "t gui", "same, without a terminal"),
     ("undo", "t undo", "remove the last line t wrote"),
     ("read", "t week | t month | t stats --weeks 8", "counts, streaks, trends"),
     ("notes", "t dash", "write Stats.md and Dashboard.md"),
@@ -1498,6 +1512,9 @@ def build_parser():
 
     label_p = sub.add_parser("label", help="Suggest topic labels for recent notes")
     label_p.set_defaults(func=cmd_label)
+
+    gui_p = sub.add_parser("gui", help="Open the quick-add window")
+    gui_p.set_defaults(func=cmd_gui)
 
     complete_p = sub.add_parser("complete", help="List completion words for the shell")
     complete_p.add_argument("word", nargs="?", help="Subcommand whose flags to list")

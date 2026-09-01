@@ -802,5 +802,88 @@ class TestReview(VaultTestCase):
         self.assertNotIn("2026-09-05", tracker.read_text(self.review_file()))
 
 
+class TestQuickAdd(VaultTestCase):
+    """The window owns no format: every write goes through tracker's own commands."""
+
+    def setUp(self):
+        super().setUp()
+        self.quickadd = __import__("quickadd")
+
+    def test_logging_goes_through_the_normal_write_path(self):
+        ok, _msg = self.quickadd.log_event("leetcode", "two-sum", "", "", "diff=easy")
+        self.assertTrue(ok)
+        day = tracker.working_date().isoformat()
+        line = self.read_daily(day).splitlines()[-1]
+        self.assertTrue(tracker.TOOL_LINE_RE.match(line), line)
+        fields = tracker.parse_fields(tracker.COMPLETED_TASK_RE.match(line).group(1))
+        self.assertEqual(fields["type"], "leetcode")
+        self.assertEqual(fields["detail"], "two-sum")
+        self.assertEqual(fields["diff"], "easy")
+
+    def test_study_topic_and_duration_reach_the_line(self):
+        ok, _msg = self.quickadd.log_event("study", "chapter 4", "algo", "45", "")
+        self.assertTrue(ok)
+        day = tracker.working_date().isoformat()
+        fields = tracker.parse_fields(
+            tracker.COMPLETED_TASK_RE.match(self.read_daily(day).splitlines()[-1]).group(1)
+        )
+        self.assertEqual((fields["topic"], fields["duration"]), ("algo", "45"))
+
+    def test_a_bad_field_reports_instead_of_exiting(self):
+        # die() must never take the window down with it.
+        for args in (
+            ("study", "", "", "half an hour", ""),   # duration is not a number
+            ("leetcode", "", "", "", "nokey"),       # extras must be key=value
+            ("leetcode", "", "", "", "type=commit"),  # reserved field
+        ):
+            with self.subTest(args=args):
+                ok, message = self.quickadd.log_event(*args)
+                self.assertFalse(ok)
+                self.assertTrue(message)
+        self.assertFalse(os.path.exists(os.path.join(self.vault, "daily")))
+
+    def test_undo_reports_when_there_is_nothing_to_undo(self):
+        ok, message = self.quickadd.undo_last()
+        self.assertFalse(ok)
+        self.assertTrue(message)
+
+    def test_log_then_undo_leaves_no_trace(self):
+        self.quickadd.log_event("commit", "hello", "", "", "")
+        day = tracker.working_date().isoformat()
+        before = self.read_daily(day)
+        self.quickadd.log_event("commit", "oops", "", "", "")
+        ok, _msg = self.quickadd.undo_last()
+        self.assertTrue(ok)
+        self.assertEqual(self.read_daily(day), before)
+
+    def test_split_extras(self):
+        self.assertEqual(
+            self.quickadd.split_extras("  diff=easy   result=solved "),
+            ["diff=easy", "result=solved"],
+        )
+        self.assertEqual(self.quickadd.split_extras(""), [])
+
+    def test_today_lines_render_events_and_tolerate_a_missing_note(self):
+        self.assertEqual(self.quickadd.today_lines(self.vault, date(2026, 8, 31)), [])
+        self.write_daily(
+            "2026-08-31",
+            "## Log\n"
+            "- [x] type:: leetcode | when:: 2026-08-31T09:05 | detail:: two-sum | diff:: easy\n"
+            "- [ ] type:: study | topic:: algo\n",
+        )
+        lines = self.quickadd.today_lines(self.vault, date(2026, 8, 31))
+        self.assertEqual(len(lines), 1)  # the unticked box is not an event
+        self.assertIn("09:05", lines[0])
+        self.assertIn("leetcode", lines[0])
+        self.assertIn("two-sum", lines[0])
+        self.assertIn("diff=easy", lines[0])
+
+    def test_format_event_survives_a_line_with_no_when(self):
+        # A box ticked in Obsidian carries no time; the window must still show it.
+        line = self.quickadd.format_event({"type": "leetcode", "_date": date(2026, 8, 31)})
+        self.assertTrue(line.startswith("--:--"))
+        self.assertIn("leetcode", line)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -113,6 +113,32 @@ Numbers only change behavior if you look at them on a schedule.
   - **Deferred, on purpose.** "Only if used" is the gate, and `FRICTION.md` is empty.
     Building it now would break the rule the whole roadmap hangs on.
 
+## Phase 5 — ease of use — **shipped**
+
+Not new numbers; the same numbers with less friction between you and them.
+
+- **Bars in `Dashboard.md`** — the weekly table and study-minutes table carry ASCII
+  bars scaled to their own largest row. A shape reads in no time; a column of
+  integers doesn't.
+- **`t dash` split out of `t stats`** — `stats` printed numbers *and* overwrote two
+  vault notes, inconsistently (`--csv` skipped the write, `--pipeline` didn't).
+  Writing is now one command that names what it wrote. Reads never write.
+- **Bare `t`** prints today's log plus a short cheatsheet instead of argparse's
+  usage blob, and **typos get a suggestion** (`t leetcod` → "Did you mean leetcode?").
+- **`t week` / `t month`** — the two windows actually asked for, by name.
+- **Daily-note template** at `<VAULT_PATH>/templates/Daily.md`, with unticked
+  `- [ ] type:: ...` boxes. Ticking one in Obsidian *is* logging: no terminal,
+  works on mobile, no new code path (the parser only ever counted `- [x]`).
+- **PowerShell tab completion**, sourced from `t complete`, which walks the parser.
+- **`t gui`** — a tkinter quick-add window (`quickadd.py`), for the 1am case where
+  opening a terminal is the reason the event never gets logged. It owns no format:
+  every write goes through `track` / `undo`.
+
+Why a window is not a violation of the exclusion list below: it adds no server, no
+dependency, no account, and no state. It is capture, which is the one thing this
+roadmap says is worth spending on. A *dashboard* GUI would be the violation —
+Obsidian already renders that, which is why `t dash` writes notes instead.
+
 ## Definition of "solid" (the quality bar per phase)
 
 1. **Data outlives the tool**: everything remains grep-able Markdown a human can read
@@ -120,15 +146,16 @@ Numbers only change behavior if you look at them on a schedule.
 2. **Append-only forever**: the only mutations are appends and the explicit `undo`.
 3. **Tested invariants**: parser and inserter covered by `unittest`; run before each
    commit.
-4. **One file, stdlib only** stays true through Phase 4. If `tracker.py` passes ~1500
-   lines, split by command — not before. (It sits near 1350 after Phase 4; the
-   `# ---- section ----` banners carry navigability until then.)
+4. **Stdlib only, and `tracker.py` under ~1500 lines.** It sits near 1500 after
+   Phase 5, so the split has started: anything sizeable now gets its own file with a
+   thin subcommand in `tracker.py` (`quickadd.py` behind `t gui` is the first). The
+   `# ---- section ----` banners still carry navigability inside it.
 5. **Anything can fail without losing data**: sync can crash mid-run, stats can hit a
    corrupt line — worst case is a warning, never a corrupted note.
 
 ## What deliberately stays out
 
-Web UI, mobile app, database, cloud sync (the vault's own sync handles that), auth,
+Web UI (a local tkinter capture window is not one — see Phase 5), mobile app, database, cloud sync (the vault's own sync handles that), auth,
 notifications/nagging, time-tracking timers (log completions, not clock time — timers
 are the highest-friction feature in existence), and any ML beyond the existing `label`.
 Each of these is where personal tools go to die.
