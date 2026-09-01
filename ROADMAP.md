@@ -163,10 +163,11 @@ typed by hand.
   principle above — a number would stop meaning "I did a thing". Picked leetcode rows
   ask for a difficulty, since that is what history cannot know and what catches an
   easy-only grind.
-- **Deliberately not built**: a foreground-window watcher. It needs a background
-  process, measures attention rather than accomplishment, and would read every window
-  title on the machine into a synced vault. If full activity tracking is ever wanted,
-  run ActivityWatch and read its database — do not grow one here.
+- **Deliberately not built at the time**: a foreground-window watcher — it measures
+  attention rather than accomplishment, and the obvious build would read every window
+  title on the machine into a synced vault. **Superseded in Phase 8** by an explicit
+  owner decision, with a design that answers both objections rather than ignoring
+  them: only category names are persisted, and time never counts as completion.
 - **Deliberately not built**: LeetCode's GraphQL API. It would give exact solved-counts
   with difficulty, and it was offered and declined: the no-network rule is worth more
   than the precision. Application stages (OA, phone, onsite) live in email and stay
@@ -183,6 +184,29 @@ The project was complete and unused: nothing in the repo created a vault, so
 - **Suggest tab in the window**, so the no-typing path does not require a terminal.
 - **Application pipeline in the Numbers pane** — apps → OA → phone → onsite, with
   conversion, which is the number the job hunt actually turns on.
+
+## Phase 8 — where the hours go — **`t watch` shipped**
+
+The counts said what got finished; nothing said what a day was spent on. The owner
+asked for exactly that — hours on assignments, hours applying, hours building — and
+accepted a watcher to get it. Two rules make it compatible with everything above:
+
+- **Only the category is ever written.** `t watch` samples the foreground window
+  (ctypes, still stdlib, still no network) and classifies it via
+  `watch-rules.txt` + built-in defaults; titles and program names are matched in
+  memory and discarded. One `type:: time | detail:: <category> | duration:: N`
+  line per session, through the same append-only, id-deduped write path as sync.
+- **Time is attention, not accomplishment.** `time` events are excluded from every
+  count, streak, trend and logged-day figure — a watched-only day is not a logged
+  day. They feed only the time tables, where each category's hours sit beside the
+  completions that justify them. `t time` by hand is rejected: measured or absent,
+  never guessed.
+
+Mechanics: 5s sampling, clock stops after 3 idle minutes, sub-2-minute alt-tabs
+don't split a session, sub-3-minute sessions are dropped, open sessions flush in
+30-minute chunks so a crash loses at most one. `t setup --watch-task` registers an
+at-login Task Scheduler job (pythonw, no console); still no server and no daemon of
+ours — the OS starts it, the OS stops it.
 
 ## Definition of "solid" (the quality bar per phase)
 
@@ -203,6 +227,7 @@ The project was complete and unused: nothing in the repo created a vault, so
 ## What deliberately stays out
 
 Web UI (a local tkinter capture window is not one — see Phase 5), mobile app, database, cloud sync (the vault's own sync handles that), auth,
-notifications/nagging, time-tracking timers (log completions, not clock time — timers
-are the highest-friction feature in existence), and any ML beyond the existing `label`.
+notifications/nagging, manual time-tracking timers (start/stop buttons are the
+highest-friction feature in existence — Phase 8 measures time passively instead,
+and hand-typed hours stay rejected), and any ML beyond the existing `label`.
 Each of these is where personal tools go to die.

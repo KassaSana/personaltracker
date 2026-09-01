@@ -1400,6 +1400,12 @@ def build_parser():
     setup_p.add_argument(
         "--profile", action="store_true", help="Append the block to your PowerShell profile"
     )
+    setup_p.add_argument(
+        "--watch-task", action="store_true", help="Register `t watch` to start at login"
+    )
+    setup_p.add_argument(
+        "--remove", action="store_true", help="With --watch-task: unregister it"
+    )
     setup_p.set_defaults(func=cmd_setup)
 
     gui_p = sub.add_parser("gui", help="Open the quick-add window")

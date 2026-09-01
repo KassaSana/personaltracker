@@ -62,6 +62,7 @@ t dash  [--weeks N]
 t sync   [--repo PATH ...] [--root DIR ...] [--days N] [--author EMAIL] [--dry-run] [--no-dash]
 t review [--week YYYY-MM-DD] [--print]
 t suggest [--days N] [--yes] [--dry-run]
+t watch  [--interval SEC] [--idle SEC] [--status]
 t label
 t gui
 t complete [command]   # completion words, for the shell
@@ -190,6 +191,45 @@ Picked leetcode rows then ask for a difficulty (`e`/`m`/`h`, Enter to skip), bec
 **What it can't know.** History proves a page was *opened*, never that a problem was solved or an application submitted. That's exactly why it proposes instead of writing, and why `--yes` is for when you've already looked. Application *stages* (OA, phone, onsite, offer) arrive by email, which is out of reach under the no-network rule — those stay manual, and they're the ones you remember anyway.
 
 Proposals carry `id::` and `src:: suggest`, so re-running is safe and you can always audit where a number came from. Commits don't appear here: `t sync` imports them exactly, and a commit needs no confirmation because it's already a completion.
+
+## Measuring time — `t watch`
+
+```
+t watch                    # watch in this terminal, print sessions as they close
+t watch --status           # is a watcher running? which rules file?
+t setup --watch-task       # start it invisibly at every login (Task Scheduler)
+t setup --watch-task --remove
+```
+
+Counts say what you finished; this says where the hours went. Every 5 seconds the
+watcher reads the foreground window and whether you are idle (3 minutes without
+input stops the clock), classifies the window into a category — `project`,
+`assignment`, `applications`, `leetcode`, `review`, or `other` — and appends one
+line per work session:
+
+```
+- [x] type:: time | when:: 2026-09-01T14:05 | detail:: assignment | duration:: 47 | id:: w20260901T1405-assignment | src:: watch
+```
+
+**The privacy boundary: only the category name is ever written.** Window titles and
+program names are matched in memory and discarded — nothing else reaches a vault
+that syncs. Classification comes from `<VAULT_PATH>/watch-rules.txt`
+(`pattern -> category`, first match wins, seeded by setup with the defaults as
+comments) layered over built-in rules for the usual suspects (IDEs and terminals →
+`project`, leetcode.com → `leetcode`, job boards → `applications`, Canvas/Word/PDF →
+`assignment`, Obsidian → `review`). Anything unmatched is `other` — counted, so the
+totals stay honest.
+
+Session rules, all tested: a sub-2-minute alt-tab neither splits a session nor
+counts against it; sessions under 3 minutes are noise and dropped; a session still
+open at 30 minutes is written as a chunk, so a crash or power-off loses at most
+half an hour. Two watchers cannot run at once.
+
+**Time is attention, not accomplishment**, so `time` events are excluded from every
+count, streak and trend — they feed only the time tables (`t stats`, `Dashboard.md`,
+the window's Numbers tab), where each category's hours sit next to the completions
+that justify them. `t time ...` by hand is rejected: a typed hour is a guess, and
+the chart only carries measurements.
 
 ## Closing the loop — `t review`
 

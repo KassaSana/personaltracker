@@ -1081,7 +1081,7 @@ class TestSetup(VaultTestCase):
         self.target = os.path.join(self.vault, "new-vault")
 
     def args(self, path=None, profile=False):
-        return Namespace(path=path or self.target, profile=profile)
+        return Namespace(path=path or self.target, profile=profile, watch_task=False, remove=False)
 
     def run_setup(self, **kwargs):
         out = StringIO()
@@ -1095,6 +1095,14 @@ class TestSetup(VaultTestCase):
             self.assertTrue(os.path.isdir(os.path.join(self.target, name)), name)
         self.assertTrue(os.path.isfile(os.path.join(self.target, "topics.txt")))
         self.assertTrue(os.path.isfile(os.path.join(self.target, tracker.DAILY_TEMPLATE)))
+
+    def test_seeded_watch_rules_are_all_comments(self):
+        self.run_setup()
+        body = tracker.read_text(os.path.join(self.target, "watch-rules.txt"))
+        # The defaults apply from code; the seed documents them without becoming
+        # a second list that could drift.
+        self.assertIn("leetcode.com", body)
+        self.assertEqual(watch.parse_rules(body), [])
 
     def test_the_seeded_vault_is_immediately_usable(self):
         self.run_setup()
@@ -1142,7 +1150,7 @@ class TestSetup(VaultTestCase):
         os.environ.pop("VAULT_PATH")
         err = StringIO()
         with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
-            self.bootstrap.cmd_setup(Namespace(path=None, profile=False))
+            self.bootstrap.cmd_setup(Namespace(path=None, profile=False, watch_task=False, remove=False))
         self.assertIn("give setup a path", err.getvalue())
 
     def test_it_offers_the_vaults_obsidian_already_knows(self):
@@ -1159,7 +1167,7 @@ class TestSetup(VaultTestCase):
 
         err = StringIO()
         with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
-            self.bootstrap.cmd_setup(Namespace(path=None, profile=False))
+            self.bootstrap.cmd_setup(Namespace(path=None, profile=False, watch_task=False, remove=False))
         message = err.getvalue()
         # Most recently opened first, and each line is ready to paste.
         self.assertLess(message.index("C:\\newest"), message.index("C:\\old"))
@@ -1178,7 +1186,7 @@ class TestSetup(VaultTestCase):
     def test_vault_path_is_the_default_target(self):
         os.environ["VAULT_PATH"] = self.target
         with contextlib.redirect_stdout(StringIO()):
-            self.bootstrap.cmd_setup(Namespace(path=None, profile=False))
+            self.bootstrap.cmd_setup(Namespace(path=None, profile=False, watch_task=False, remove=False))
         self.assertTrue(os.path.isdir(os.path.join(self.target, "daily")))
 
     def test_profile_append_is_idempotent(self):

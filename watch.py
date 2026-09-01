@@ -46,6 +46,7 @@ DEFAULT_RULES = (
     ("acrobat", "assignment"),
     ("onenote", "assignment"),
     ("code.exe", "project"),
+    ("cursor.exe", "project"),
     ("pycharm", "project"),
     ("idea64", "project"),
     ("windowsterminal", "project"),
@@ -332,12 +333,19 @@ def idle_seconds():
 # ---- the command -----------------------------------------------------------
 
 
+def say(message):
+    """print, except under pythonw -- where stdout is None and the scheduled task
+    must keep watching rather than die on its first status line."""
+    if sys.stdout is not None:
+        print(message)
+
+
 def run_watch(vault, interval, idle_limit):
     import time as time_mod
 
     rules = load_rules(vault)
     sessions = Sessions()
-    print("watching (interval %ss, idle after %ss). Ctrl+C to stop." % (interval, idle_limit))
+    say("watching (interval %ss, idle after %ss). Ctrl+C to stop." % (interval, idle_limit))
     try:
         while True:
             now = datetime.now()
@@ -359,7 +367,7 @@ def report(vault, flushed):
         return
     write_sessions(vault, flushed)
     for start, minutes, category in flushed:
-        print("  %s  %3d min  %s" % (start.strftime("%H:%M"), minutes, category))
+        say("  %s  %3d min  %s" % (start.strftime("%H:%M"), minutes, category))
 
 
 def cmd_watch(args):

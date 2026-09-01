@@ -11,6 +11,8 @@ you pass --profile.
 
 import json
 import os
+import subprocess
+import sys
 
 import tracker
 
@@ -29,6 +31,9 @@ quant
 interview-prep
 coursework
 """
+
+# The Task Scheduler job `--watch-task` owns. Only ever touched under this name.
+WATCH_TASK_NAME = "PersonalTrackerWatch"
 
 PROFILE_MARKER = "# --- personaltracker ---"
 
@@ -117,7 +122,26 @@ def build_vault(target):
         body = "# {{date}}\n\n## Log\n\n## Notes\n\n"
     seed_file(template_target, body, created, kept)
     seed_file(os.path.join(target, "topics.txt"), STARTER_TOPICS, created, kept)
+    seed_file(os.path.join(target, "watch-rules.txt"), starter_watch_rules(), created, kept)
     return created, kept
+
+
+def starter_watch_rules():
+    """Seed for watch-rules.txt, generated from watch.py's own defaults so there is
+    no second list to drift. Everything ships commented out: the built-ins apply
+    from code, and an uncommented line here overrides them."""
+    import watch
+
+    lines = [
+        "# Rules for `t watch`: pattern -> category, matched (case-insensitive) against",
+        '# "exe|window title", first match wins. Lines here beat the built-in defaults;',
+        "# `#` comments and blanks are ignored. Only the category name is ever written",
+        "# to the vault -- titles stay in the watcher's memory.",
+        "#",
+        "# The built-in defaults, for reference (uncomment and edit to override):",
+    ]
+    lines += ["# %s -> %s" % rule for rule in watch.DEFAULT_RULES]
+    return "\n".join(lines) + "\n"
 
 
 def profile_path():
@@ -168,7 +192,56 @@ def append_to_profile(block):
     return "appended to %s -- open a new terminal for it to take effect" % path
 
 
+def run_schtasks(argv):
+    """One schtasks call. Returns (ok, combined output); never raises."""
+    try:
+        proc = subprocess.run(
+            ["schtasks"] + argv, capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, str(exc)
+    output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    return proc.returncode == 0, output
+
+
+def watch_task(target, remove):
+    """Register (or remove) the at-login Task Scheduler job for `t watch`.
+
+    A scheduled task never sees the PowerShell profile, so VAULT_PATH is also
+    persisted into the user environment with setx -- the same value the profile
+    block sets, from the same setup target.
+    """
+    if remove:
+        ok, output = run_schtasks(["/Delete", "/TN", WATCH_TASK_NAME, "/F"])
+        print("removed task %s" % WATCH_TASK_NAME if ok else "could not remove task: %s" % output)
+        return 0 if ok else 1
+
+    pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    if not os.path.isfile(pythonw):
+        pythonw = sys.executable  # no console-less python; a window beats no watcher
+    command = '"%s" "%s" watch' % (pythonw, os.path.join(repo_dir(), "tracker.py"))
+
+    ok, output = run_schtasks(
+        ["/Create", "/TN", WATCH_TASK_NAME, "/SC", "ONLOGON", "/TR", command, "/F"]
+    )
+    if not ok:
+        print("could not register task: %s" % output)
+        return 1
+    try:
+        subprocess.run(["setx", "VAULT_PATH", target], capture_output=True, timeout=30)
+    except OSError:
+        print("warning: could not persist VAULT_PATH with setx", file=sys.stderr)
+    run_schtasks(["/Run", "/TN", WATCH_TASK_NAME])
+    print("registered %s: `t watch` starts at login (and was started now)" % WATCH_TASK_NAME)
+    print("undo with:  t setup --watch-task --remove")
+    return 0
+
+
 def cmd_setup(args):
+    if args.watch_task:
+        return watch_task(resolve_target(args.path), args.remove)
+    if args.remove:
+        tracker.die("--remove only makes sense with --watch-task")
     target = resolve_target(args.path)
     created, _kept = build_vault(target)
 
@@ -201,4 +274,6 @@ def cmd_setup(args):
     print("  t sync --dry-run                 see the commits it would import")
     print("  t suggest --dry-run              see what your history suggests")
     print("  t gui                            the window, if a terminal is the problem")
+    print("  t watch                          measure focused time by category")
+    print("  t setup --watch-task             ...and have it start at every login")
     return 0
