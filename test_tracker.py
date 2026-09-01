@@ -976,6 +976,100 @@ class TestQuickAdd(VaultTestCase):
         self.assertIn("leetcode", line)
 
 
+class TestSetup(VaultTestCase):
+    """Setup creates what is missing and never touches what exists."""
+
+    def setUp(self):
+        super().setUp()
+        self.bootstrap = __import__("bootstrap")
+        self.target = os.path.join(self.vault, "new-vault")
+
+    def args(self, path=None, profile=False):
+        return Namespace(path=path or self.target, profile=profile)
+
+    def run_setup(self, **kwargs):
+        out = StringIO()
+        with contextlib.redirect_stdout(out):
+            self.bootstrap.cmd_setup(self.args(**kwargs))
+        return out.getvalue()
+
+    def test_creates_the_whole_layout(self):
+        self.run_setup()
+        for name in self.bootstrap.VAULT_DIRS:
+            self.assertTrue(os.path.isdir(os.path.join(self.target, name)), name)
+        self.assertTrue(os.path.isfile(os.path.join(self.target, "topics.txt")))
+        self.assertTrue(os.path.isfile(os.path.join(self.target, tracker.DAILY_TEMPLATE)))
+
+    def test_the_seeded_vault_is_immediately_usable(self):
+        self.run_setup()
+        os.environ["VAULT_PATH"] = self.target
+        self.run_cli("track", "leetcode", "two-sum", "--date", "2026-08-31")
+        note = tracker.read_text(os.path.join(self.target, "daily", "2026-08-31.md"))
+        self.assertIn("detail:: two-sum", note)
+        # The seeded template was used, so the note has its quick-log boxes.
+        self.assertIn("- [ ] type::", note)
+        # And topics.txt parses as the label command expects.
+        self.assertIn("algorithms", tracker.load_topics(self.target))
+
+    def test_it_never_overwrites_your_files(self):
+        os.makedirs(os.path.join(self.target, "templates"))
+        tracker.write_text(os.path.join(self.target, "topics.txt"), "just-mine\n")
+        tracker.write_text(os.path.join(self.target, tracker.DAILY_TEMPLATE), "# mine\n")
+        self.run_setup()
+        self.assertEqual(tracker.read_text(os.path.join(self.target, "topics.txt")), "just-mine\n")
+        self.assertEqual(
+            tracker.read_text(os.path.join(self.target, tracker.DAILY_TEMPLATE)), "# mine\n"
+        )
+
+    def test_running_it_twice_changes_nothing(self):
+        self.run_setup()
+        before = sorted(os.walk(self.target))
+        out = self.run_setup()
+        self.assertIn("already there", out)
+        self.assertEqual(sorted(os.walk(self.target)), before)
+
+    def test_the_printed_block_carries_real_paths(self):
+        out = self.run_setup()
+        self.assertIn('$env:VAULT_PATH = "%s"' % self.target, out)
+        self.assertIn("t.ps1", out)
+        self.assertIn("completion.ps1", out)
+
+    def test_the_repo_guess_is_a_list_of_repositories_not_their_parent(self):
+        # sync treats each entry as a repo and warns about anything that is not one,
+        # so guessing the containing folder would ship a broken default.
+        guess = self.bootstrap.guess_repos()
+        self.assertTrue(guess)
+        for path in guess.split(os.pathsep):
+            self.assertTrue(tracker.is_git_repo(path), path)
+
+    def test_no_path_and_no_vault_path_is_a_clear_error(self):
+        os.environ.pop("VAULT_PATH")
+        err = StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            self.bootstrap.cmd_setup(Namespace(path=None, profile=False))
+        self.assertIn("give setup a path", err.getvalue())
+
+    def test_vault_path_is_the_default_target(self):
+        os.environ["VAULT_PATH"] = self.target
+        with contextlib.redirect_stdout(StringIO()):
+            self.bootstrap.cmd_setup(Namespace(path=None, profile=False))
+        self.assertTrue(os.path.isdir(os.path.join(self.target, "daily")))
+
+    def test_profile_append_is_idempotent(self):
+        profile = os.path.join(self.vault, "profile.ps1")
+        self.bootstrap.profile_path = lambda: profile
+        block = self.bootstrap.profile_block(self.target, "D:\\repos")
+        tracker.write_text(profile, "# my own settings\n")
+
+        self.assertIn("appended", self.bootstrap.append_to_profile(block))
+        after = tracker.read_text(profile)
+        self.assertIn("# my own settings", after)   # yours survives
+        self.assertIn("$env:VAULT_PATH", after)
+
+        self.assertIn("already has", self.bootstrap.append_to_profile(block))
+        self.assertEqual(tracker.read_text(profile), after)
+
+
 class TestSuggest(VaultTestCase):
     """Proposals come from local evidence and nothing is written without a pick."""
 

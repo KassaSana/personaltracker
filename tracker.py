@@ -31,7 +31,7 @@ VALID_TYPES = (
 
 SUBCOMMANDS = (
     "track", "today", "undo", "stats", "week", "month", "dash", "sync", "review",
-    "label", "suggest", "gui", "complete",
+    "label", "suggest", "gui", "setup", "complete",
 )
 
 # `t week` is `t stats 7` under a name you actually reach for.
@@ -1422,6 +1422,11 @@ def cmd_suggest(args):
     sibling_module("suggest").cmd_suggest(args)
 
 
+def cmd_setup(args):
+    """Create a vault and print the profile block. Lives in bootstrap.py."""
+    sibling_module("bootstrap").cmd_setup(args)
+
+
 def cmd_complete(args):
     """Words the shell may offer after `t`. Derived from the parser, never a
     second list to keep in sync: a new flag is completable the day it exists."""
@@ -1465,8 +1470,10 @@ def cmd_overview():
     if raw and os.path.isdir(raw):
         cmd_today(argparse.Namespace(date=None))
     else:
-        # Never fatal: the cheatsheet is exactly what someone with no vault needs.
+        # Never fatal: the cheatsheet is exactly what someone with no vault needs,
+        # and setup is the one command that gets them one.
         print("VAULT_PATH is not set to an existing directory; nothing to show yet.")
+        print('Start with:  t setup "D:\\path\\to\\vault"')
     print("")
     print_cheatsheet()
 
@@ -1561,6 +1568,13 @@ def build_parser():
     suggest_p.add_argument("--yes", action="store_true", help="Apply every proposal")
     suggest_p.add_argument("--dry-run", action="store_true", help="Show proposals, write nothing")
     suggest_p.set_defaults(func=cmd_suggest)
+
+    setup_p = sub.add_parser("setup", help="Create a vault and print the profile block")
+    setup_p.add_argument("path", nargs="?", help="Where the vault goes (default: $VAULT_PATH)")
+    setup_p.add_argument(
+        "--profile", action="store_true", help="Append the block to your PowerShell profile"
+    )
+    setup_p.set_defaults(func=cmd_setup)
 
     gui_p = sub.add_parser("gui", help="Open the quick-add window")
     gui_p.set_defaults(func=cmd_gui)
