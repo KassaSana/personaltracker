@@ -220,6 +220,27 @@ class TestImplicitTrack(VaultTestCase):
         self.assertIn("unknown command or type nonsense", err.getvalue())
         self.assertIn("leetcode", err.getvalue())
 
+    def test_a_typo_gets_a_suggestion(self):
+        for typo, wanted in (("leetcod", "leetcode"), ("stat", "stats"), ("revew", "review")):
+            err = StringIO()
+            with self.subTest(typo=typo):
+                with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+                    tracker.main([typo])
+                self.assertIn("Did you mean %s?" % wanted, err.getvalue())
+
+    def test_nonsense_gets_the_list_but_no_invented_suggestion(self):
+        err = StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            tracker.main(["zzzzzz"])
+        self.assertNotIn("Did you mean", err.getvalue())
+        self.assertIn("leetcode", err.getvalue())
+
+    def test_track_suggests_on_an_explicit_bad_type(self):
+        err = StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            tracker.main(["track", "Leetcod"])
+        self.assertIn("Did you mean leetcode?", err.getvalue())
+
     def test_bare_invocation_shows_today_and_the_cheatsheet(self):
         self.write_daily(
             tracker.working_date().isoformat(),

@@ -3,6 +3,7 @@
 
 import argparse
 import csv
+import difflib
 import os
 import re
 import shutil
@@ -80,6 +81,12 @@ TOOL_LINE_RE = re.compile(r"^- \[x\] type:: \S+ \| when:: \d{4}-\d{2}-\d{2}T\d{2
 def die(message):
     print(message, file=sys.stderr)
     sys.exit(1)
+
+
+def suggest(word, options):
+    """' did you mean X?' for a near miss, or '' when nothing is close enough."""
+    close = difflib.get_close_matches(word.lower(), options, n=1, cutoff=0.6)
+    return " Did you mean %s?" % close[0] if close else ""
 
 
 def vault_path():
@@ -238,7 +245,10 @@ def daily_path(vault, day):
 def cmd_track(args):
     event_type = args.event_type
     if event_type not in VALID_TYPES:
-        die("unknown type %s; expected one of: %s" % (event_type, ", ".join(VALID_TYPES)))
+        die(
+            "unknown type %s.%s\nexpected one of: %s"
+            % (event_type, suggest(event_type, VALID_TYPES), ", ".join(VALID_TYPES))
+        )
     if (args.topic is not None or args.duration is not None) and event_type != "study":
         die("--topic and --duration are only valid with type study")
 
@@ -1458,8 +1468,13 @@ def main(argv=None):
             argv.insert(0, "track")
         elif argv[0] not in SUBCOMMANDS:
             die(
-                "unknown command or type %s; commands: %s; types: %s"
-                % (argv[0], ", ".join(SUBCOMMANDS), ", ".join(VALID_TYPES))
+                "unknown command or type %s.%s\ncommands: %s\ntypes: %s"
+                % (
+                    argv[0],
+                    suggest(argv[0], SUBCOMMANDS + VALID_TYPES),
+                    ", ".join(SUBCOMMANDS),
+                    ", ".join(VALID_TYPES),
+                )
             )
     parser = build_parser()
     args = parser.parse_args(argv)
