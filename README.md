@@ -36,6 +36,7 @@ t <type> [detail...] [--date YYYY-MM-DD] [--topic T] [--duration MIN] [--x K=V .
 t today [--date YYYY-MM-DD]
 t undo  [--date YYYY-MM-DD] [--yes]
 t stats [7|30] [--weeks N] [--pipeline] [--csv]
+t dash  [--weeks N]
 t sync   [--repo PATH ...] [--root DIR ...] [--days N] [--author EMAIL] [--dry-run]
 t review [--week YYYY-MM-DD] [--print]
 t label
@@ -64,6 +65,19 @@ t study --topic algo --duration 30
 - `t stats --csv` — every event to stdout as CSV, for the day you want a spreadsheet.
 
 **Honesty rule:** a week with fewer than 3 logged days reads as `low data`, never as a decline. A drop in the chart should mean a drop in you, not in your logging — watch the `days` column first.
+
+`stats` only prints; it never touches the vault.
+
+## Reading them in Obsidian — `t dash`
+
+```
+t dash              # write Stats.md and Dashboard.md, 8 weeks of history
+t dash --weeks 12
+```
+
+`dash` is the only command that overwrites files in the vault root: `Stats.md` (Dataview queries) and `Dashboard.md` (weekly table, difficulty mix, streaks, pipeline, study minutes by topic). Both carry a generated-file header and are rewritten in full each run — put nothing of your own in them.
+
+The weekly table and the study-minutes table carry ASCII bars scaled to their own largest row, so the shape of a month is readable at a glance instead of column-by-column.
 
 ## Importing commits — `t sync`
 
@@ -108,7 +122,7 @@ Because the filename is the working-day assignment, `stats` counts by filename a
 ## Notes
 
 - Events go in `<VAULT_PATH>/daily/YYYY-MM-DD.md` under `## Log`. Writes are append-only; existing bytes are never rewritten or reordered — that holds for `sync` too.
-- `stats` overwrites two generated notes in the vault root: `Stats.md` (Dataview queries) and `Dashboard.md` (weekly table, difficulty mix, streaks, pipeline). Both are excluded from `label`.
+- `dash` overwrites two generated notes in the vault root: `Stats.md` and `Dashboard.md`. Both are excluded from `label`. No other read command writes anything.
 - `review` writes `<VAULT_PATH>/reviews/YYYY-Www.md`, once, and never touches it again.
 - `label` sends note titles and headings only to the `claude` CLI, shows a proposal table, and writes `topic::` only after you type `y`.
 - Tests: `python -m unittest test_tracker` — run before every commit.
