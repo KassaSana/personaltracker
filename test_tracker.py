@@ -13,6 +13,8 @@ from argparse import Namespace
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 
+import label
+import review
 import tracker
 
 
@@ -555,7 +557,7 @@ class TestNumbers(VaultTestCase):
     def test_generated_notes_are_not_label_candidates(self):
         self.seed("2026-08-31", "type:: commit | when:: 2026-08-31T09:00")
         self.run_cli("dash")
-        recent = list(tracker.iter_recent_notes(self.vault, datetime(2000, 1, 1)))
+        recent = list(label.iter_recent_notes(self.vault, datetime(2000, 1, 1)))
         self.assertFalse([p for p in recent if os.path.basename(p) in tracker.GENERATED_NOTES])
 
     def test_stats_rejects_bad_windows(self):
@@ -850,11 +852,11 @@ class TestReview(VaultTestCase):
 
     def test_default_week_is_the_one_that_just_ended(self):
         self.assertEqual(
-            tracker.review_week_start(date(2026, 9, 2)), date(2026, 8, 24)
+            review.review_week_start(date(2026, 9, 2)), date(2026, 8, 24)
         )
         # --week takes any date inside the target week.
         self.assertEqual(
-            tracker.review_week_start(date(2026, 9, 2), date(2026, 8, 27)),
+            review.review_week_start(date(2026, 9, 2), date(2026, 8, 27)),
             date(2026, 8, 24),
         )
 
@@ -869,7 +871,7 @@ class TestReview(VaultTestCase):
         self.assertIn("Logged 3 of 7 days.", body)
         self.assertIn("| 2026-08-24 | 3 | 3 | 3 |", body)  # week, days, events, leetcode
         self.assertIn("## Leetcode difficulty mix", body)
-        for prompt in tracker.REVIEW_PROMPTS:
+        for prompt in review.PROMPTS:
             self.assertIn("## %s" % prompt, body)
 
     def test_low_data_week_reads_as_insufficient_not_decline(self):
@@ -1102,7 +1104,7 @@ class TestSetup(VaultTestCase):
         # The seeded template was used, so the note has its quick-log boxes.
         self.assertIn("- [ ] type::", note)
         # And topics.txt parses as the label command expects.
-        self.assertIn("algorithms", tracker.load_topics(self.target))
+        self.assertIn("algorithms", label.load_topics(self.target))
 
     def test_it_never_overwrites_your_files(self):
         os.makedirs(os.path.join(self.target, "templates"))

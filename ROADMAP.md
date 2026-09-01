@@ -191,9 +191,11 @@ The project was complete and unused: nothing in the repo created a vault, so
 2. **Append-only forever**: the only mutations are appends and the explicit `undo`.
 3. **Tested invariants**: parser and inserter covered by `unittest`; run before each
    commit.
-4. **Stdlib only, and `tracker.py` under ~1500 lines.** It sits near 1500 after
-   Phase 5, so the split has started: anything sizeable now gets its own file with a
-   thin subcommand in `tracker.py` (`quickadd.py` behind `t gui` is the first). The
+4. **Stdlib only, and `tracker.py` under ~1500 lines.** The ceiling is enforced, not
+   aspirational: anything sizeable gets its own file with a thin subcommand in
+   `tracker.py`. `quickadd.py` (`t gui`), `suggest.py`, `bootstrap.py` (`t setup`),
+   `review.py` and `label.py` are out; `tracker.py` keeps the CLI, the note I/O and
+   the numbers engine, which is what every other file reuses. The
    `# ---- section ----` banners still carry navigability inside it.
 5. **Anything can fail without losing data**: sync can crash mid-run, stats can hit a
    corrupt line — worst case is a warning, never a corrupted note.

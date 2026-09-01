@@ -53,10 +53,6 @@ GIT_FIELD_SEP = "\x1f"
 GIT_LOG_FORMAT = GIT_FIELD_SEP.join(("%H", "%aI", "%s"))
 SHORT_SHA_LEN = 8
 
-# review: the reviewed week plus this many weeks of context in the table.
-REVIEW_CONTEXT_WEEKS = 4
-REVIEW_PROMPTS = ("What worked", "What slipped", "One change next week")
-
 # Bars in the generated notes. Fixed width so one big week cannot stretch the table,
 # and ASCII so the file stays readable in any editor, console or codepage.
 BAR_WIDTH = 20
@@ -79,7 +75,6 @@ LOG_HEADING_RE = re.compile(r"^## Log[ \t]*\r?$", re.MULTILINE)
 NEXT_H2_RE = re.compile(r"^## (?!#)", re.MULTILINE)
 COMPLETED_TASK_RE = re.compile(r"^- \[x\]\s+(.*)$")
 FIELD_RE = re.compile(r"(\w+)::\s*([^|]*)")
-HEADING_LINE_RE = re.compile(r"^#{1,6} ")
 DAILY_NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.md$")
 EXTRA_KEY_RE = re.compile(r"^\w+$")
 # Only lines this tool wrote are eligible for undo.
@@ -1177,235 +1172,6 @@ def cmd_sync(args):
         write_generated_notes(vault)
 
 
-# ---- review ----------------------------------------------------------------
-#
-# Numbers only change behavior if you read them on a schedule. Unlike Stats.md and
-# Dashboard.md, a review is written once and never regenerated: it holds your handwriting.
-
-
-def review_week_start(today, week=None):
-    """Monday of the week under review — last week by default, since you review on Sunday."""
-    if week is not None:
-        return week_start(week)
-    return week_start(today) - timedelta(weeks=1)
-
-
-def review_path(vault, start):
-    year, week_no, _weekday = start.isocalendar()
-    return os.path.join(vault, "reviews", "%04d-W%02d.md" % (year, week_no))
-
-
-def review_markdown(events, start, today):
-    """The week's numbers, pre-filled, followed by the three prompts."""
-    end = start + timedelta(days=6)
-    history = [f for f in events if f["_date"] <= end]
-    window = [f for f in history if f["_date"] >= start - timedelta(weeks=REVIEW_CONTEXT_WEEKS)]
-    buckets = weekly_buckets(window, REVIEW_CONTEXT_WEEKS + 1, end)
-
-    year, week_no, _weekday = start.isocalendar()
-    lines = [
-        "# Review %04d-W%02d" % (year, week_no),
-        "",
-        # ASCII only: this string is printed to consoles whose codepage is not UTF-8.
-        "%s to %s. Numbers generated %s; the prompts below are yours to answer."
-        % (start.isoformat(), end.isoformat(), today.isoformat()),
-        "",
-        "## Numbers",
-        "",
-    ]
-    headers, rows = weekly_report(buckets)
-    lines += markdown_table(headers, rows)
-    lines += ["", "Logged %d of 7 days." % buckets[0]["days"]]
-    if buckets[0]["days"] < MIN_LOGGED_DAYS:
-        lines.append(
-            "Fewer than %d logged days: read this week as insufficient data, not decline."
-            % MIN_LOGGED_DAYS
-        )
-    lines.append("")
-
-    diff = difficulty_report(buckets)
-    if diff:
-        lines += ["## Leetcode difficulty mix", ""] + markdown_table(*diff) + [""]
-
-    lines += ["## Streaks", ""]
-    lines += ["- " + ln.strip() for ln in streak_lines(history, end)]
-    lines.append("")
-
-    pipeline = pipeline_report(history)
-    if pipeline:
-        lines += ["## Application pipeline", ""] + markdown_table(*pipeline) + [""]
-
-    for prompt in REVIEW_PROMPTS:
-        lines += ["## %s" % prompt, "", "- ", ""]
-    return "\n".join(lines)
-
-
-def cmd_review(args):
-    vault = vault_path()
-    today = working_date()
-    start = review_week_start(today, parse_iso_date(args.week) if args.week else None)
-
-    events, _unparseable = load_events(vault)
-    body = review_markdown(events, start, today)
-
-    if args.print_only:
-        print(body)
-        return
-
-    path = review_path(vault, start)
-    if os.path.exists(path):
-        print("review already exists, leaving it alone: %s" % path)
-        return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    write_text(path, body + "\n")
-    print("wrote %s" % path)
-
-
-# ---- label -----------------------------------------------------------------
-
-
-def load_topics(vault):
-    path = os.path.join(vault, "topics.txt")
-    if not os.path.isfile(path):
-        die("topics.txt not found in VAULT_PATH; create it with one topic per line.")
-    topics = []
-    for line in read_text(path).splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        topics.append(line)
-    if not topics:
-        die("topics.txt has no topics.")
-    return topics
-
-
-def iter_recent_notes(vault, since):
-    since_ts = since.timestamp()
-    for root, _dirs, files in os.walk(vault):
-        for name in files:
-            if not name.endswith(".md") or name in GENERATED_NOTES:
-                continue
-            path = os.path.join(root, name)
-            try:
-                mtime = os.path.getmtime(path)
-            except OSError:
-                continue
-            if mtime < since_ts:
-                continue
-            yield path
-
-
-def note_headings(content):
-    if content.startswith("﻿"):
-        content = content[1:]
-    headings = []
-    for raw in content.splitlines():
-        line = raw.rstrip("\r")
-        if HEADING_LINE_RE.match(line):
-            headings.append(line)
-    return headings
-
-
-def build_label_prompt(title, headings, topics):
-    # Single line: cmd.exe / claude.cmd drop everything after an embedded newline.
-    heading_text = " | ".join(headings) if headings else "(no headings)"
-    labels = ", ".join(topics)
-    return (
-        "Note title: %s. Headings: %s. Allowed labels: %s. "
-        "Reply with exactly one label from this list, or the word other, and nothing else."
-        % (title, heading_text, labels)
-    )
-
-
-def call_claude(prompt):
-    exe = shutil.which("claude")
-    if not exe:
-        die("claude CLI is not installed or not on PATH.")
-    argv = [exe, "-p", prompt]
-    run_kw = {"capture_output": True, "text": True}
-    # npm's claude.cmd is not a Win32 exe.
-    if sys.platform == "win32" and exe.lower().endswith((".cmd", ".bat")):
-        run_kw["shell"] = True
-        argv = subprocess.list2cmdline(argv)
-    try:
-        proc = subprocess.run(argv, **run_kw)
-    except OSError:
-        die("claude CLI is not installed or not on PATH.")
-    if proc.returncode != 0:
-        err = (proc.stderr or proc.stdout or "claude CLI failed").strip()
-        die(err.splitlines()[0] if err else "claude CLI failed.")
-    return proc.stdout.strip()
-
-
-def normalize_label(raw, topics):
-    token = ""
-    if raw.strip():
-        token = raw.strip().splitlines()[0].strip()
-    if token in topics or token == "other":
-        return token, False
-    return "other", True
-
-
-def insert_topic_field(content, label):
-    """Insert topic:: after the first heading (or at the top). Existing lines stay intact."""
-    nl = newline_of(content) if content else "\n"
-    field = "topic:: %s" % label
-    bom = 1 if content.startswith("﻿") else 0
-    body = content[bom:]
-    m = re.search(r"^#{1,6} .*\r?$", body, re.MULTILINE)
-    if not m:
-        return content[:bom] + field + nl + content[bom:]
-    after = bom + m.end()
-    if after < len(content) and content[after] == "\n":
-        after += 1
-    addition = field + nl
-    if after > 0 and content[after - 1] != "\n":
-        addition = nl + addition
-    return content[:after] + addition + content[after:]
-
-
-def cmd_label(_args):
-    vault = vault_path()
-    topics = load_topics(vault)
-    candidates = []
-    for path in iter_recent_notes(vault, working_day_start()):
-        content = read_text(path)
-        if "topic::" in content:
-            continue
-        candidates.append((path, content))
-
-    if not candidates:
-        print("No notes to label.")
-        return
-
-    proposals = []
-    for path, content in candidates:
-        title = os.path.splitext(os.path.basename(path))[0]
-        headings = note_headings(content)
-        raw = call_claude(build_label_prompt(title, headings, topics))
-        label, fallback = normalize_label(raw, topics)
-        rel = os.path.relpath(path, vault)
-        if fallback:
-            shown = raw.strip().splitlines()[0].strip() if raw.strip() else ""
-            print("warning: unexpected label %r for %s; using other" % (shown, rel), file=sys.stderr)
-        proposals.append((path, content, label, rel))
-
-    for _path, _content, label, rel in proposals:
-        print("%s  %s" % (rel, label))
-
-    if not sys.stdin.isatty():
-        return
-    try:
-        reply = input("Apply? [y/N] ")
-    except EOFError:
-        return
-    if reply.strip() != "y":
-        return
-
-    for path, content, label, _rel in proposals:
-        write_text(path, insert_topic_field(content, label))
-
-
 # ---- CLI -------------------------------------------------------------------
 
 
@@ -1430,6 +1196,18 @@ def cmd_gui(_args):
 def cmd_suggest(args):
     """Propose events from local evidence. The reader lives in suggest.py."""
     sibling_module("suggest").cmd_suggest(args)
+
+
+def cmd_review(args):
+    """Write reviews/YYYY-Www.md. The note's shape lives in review.py; its numbers
+    come back through this file's report functions, so the two cannot disagree."""
+    sibling_module("review").cmd_review(args)
+
+
+def cmd_label(args):
+    """Propose one topic per recent note. Lives in label.py: it is the only command
+    that shells out to a model, and nothing else here should have to import it."""
+    sibling_module("label").cmd_label(args)
 
 
 def cmd_setup(args):
