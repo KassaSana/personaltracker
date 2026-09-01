@@ -31,7 +31,7 @@ VALID_TYPES = (
 
 SUBCOMMANDS = (
     "track", "today", "undo", "stats", "week", "month", "dash", "sync", "review",
-    "label", "gui", "complete",
+    "label", "suggest", "gui", "complete",
 )
 
 # `t week` is `t stats 7` under a name you actually reach for.
@@ -1399,17 +1399,27 @@ def cmd_label(_args):
 # ---- CLI -------------------------------------------------------------------
 
 
-def cmd_gui(_args):
-    """Open the quick-add window. The window itself lives in quickadd.py: this file
-    stays the CLI, and tkinter is imported only if you ask for it."""
+def sibling_module(name):
+    """Import a module next to this file. Commands big enough to need their own file
+    are loaded on use, so the CLI still starts with nothing but the stdlib parsed."""
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:
         sys.path.insert(0, here)
     try:
-        import quickadd
+        return __import__(name)
     except ImportError as exc:
-        die("could not open the window: %s" % exc)
-    sys.exit(quickadd.main())
+        die("could not load %s.py: %s" % (name, exc))
+
+
+def cmd_gui(_args):
+    """Open the quick-add window. The window itself lives in quickadd.py: this file
+    stays the CLI, and tkinter is imported only if you ask for it."""
+    sys.exit(sibling_module("quickadd").main())
+
+
+def cmd_suggest(args):
+    """Propose events from local evidence. The reader lives in suggest.py."""
+    sibling_module("suggest").cmd_suggest(args)
 
 
 def cmd_complete(args):
@@ -1433,6 +1443,7 @@ CHEATSHEET = (
     ("read", "t week | t month | t stats --weeks 8", "counts, streaks, trends"),
     ("notes", "t dash", "write Stats.md and Dashboard.md"),
     ("import", "t sync", "pull in git commits"),
+    ("propose", "t suggest", "leetcode and applications from history"),
     ("close", "t review", "last week's numbers plus three prompts"),
 )
 
@@ -1542,6 +1553,14 @@ def build_parser():
 
     label_p = sub.add_parser("label", help="Suggest topic labels for recent notes")
     label_p.set_defaults(func=cmd_label)
+
+    suggest_p = sub.add_parser(
+        "suggest", help="Propose events from browser history; writes only what you pick"
+    )
+    suggest_p.add_argument("--days", metavar="N", type=int, default=3, help="Look back N days")
+    suggest_p.add_argument("--yes", action="store_true", help="Apply every proposal")
+    suggest_p.add_argument("--dry-run", action="store_true", help="Show proposals, write nothing")
+    suggest_p.set_defaults(func=cmd_suggest)
 
     gui_p = sub.add_parser("gui", help="Open the quick-add window")
     gui_p.set_defaults(func=cmd_gui)

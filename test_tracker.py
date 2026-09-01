@@ -4,10 +4,12 @@
 import contextlib
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 
@@ -972,6 +974,302 @@ class TestQuickAdd(VaultTestCase):
         line = self.quickadd.format_event({"type": "leetcode", "_date": date(2026, 8, 31)})
         self.assertTrue(line.startswith("--:--"))
         self.assertIn("leetcode", line)
+
+
+class TestSuggest(VaultTestCase):
+    """Proposals come from local evidence and nothing is written without a pick."""
+
+    def setUp(self):
+        super().setUp()
+        self.suggest = __import__("suggest")
+        self.dbs = []
+
+    def chromium_db(self, *rows):
+        """A stand-in Chrome History file: (url, title, datetime)."""
+        path = os.path.join(self.vault, "History%d" % len(self.dbs))
+        conn = sqlite3.connect(path)
+        with conn:
+            conn.execute("CREATE TABLE urls (id INTEGER PRIMARY KEY, url TEXT, title TEXT)")
+            conn.execute("CREATE TABLE visits (id INTEGER PRIMARY KEY, url INTEGER, visit_time INTEGER)")
+            for i, (url, title, when) in enumerate(rows, start=1):
+                stamp = int((self.as_utc(when) - self.suggest.CHROMIUM_EPOCH).total_seconds() * 1e6)
+                conn.execute("INSERT INTO urls VALUES (?,?,?)", (i, url, title))
+                conn.execute("INSERT INTO visits VALUES (?,?,?)", (i, i, stamp))
+        conn.close()
+        self.dbs.append(("chromium", path))
+        return path
+
+    def firefox_db(self, *rows):
+        path = os.path.join(self.vault, "places%d.sqlite" % len(self.dbs))
+        conn = sqlite3.connect(path)
+        with conn:
+            conn.execute("CREATE TABLE moz_places (id INTEGER PRIMARY KEY, url TEXT, title TEXT)")
+            conn.execute("CREATE TABLE moz_historyvisits (id INTEGER PRIMARY KEY, place_id INTEGER, visit_date INTEGER)")
+            for i, (url, title, when) in enumerate(rows, start=1):
+                stamp = int((self.as_utc(when) - self.suggest.UNIX_EPOCH).total_seconds() * 1e6)
+                conn.execute("INSERT INTO moz_places VALUES (?,?,?)", (i, url, title))
+                conn.execute("INSERT INTO moz_historyvisits VALUES (?,?,?)", (i, i, stamp))
+        conn.close()
+        self.dbs.append(("firefox", path))
+        return path
+
+    def as_utc(self, when):
+        """Browsers store UTC; the tests speak local time, same as the tool."""
+        return when - (datetime.now() - datetime.utcnow())
+
+    def gather(self, days=3):
+        since = datetime.now() - timedelta(days=days)
+        return self.suggest.gather(since, self.dbs)
+
+    # -- URL classification --
+
+    def test_leetcode_problem_urls_become_leetcode_events(self):
+        for url in (
+            "https://leetcode.com/problems/two-sum/",
+            "https://leetcode.com/problems/two-sum/description/",
+            "https://www.leetcode.com/problems/Two-Sum",
+        ):
+            with self.subTest(url=url):
+                got = self.suggest.classify(url, "Two Sum - LeetCode")
+                self.assertEqual(got["type"], "leetcode")
+                self.assertEqual(got["detail"], "two-sum")
+                self.assertEqual(got["ident"], "lc-two-sum")
+
+    def test_job_boards_yield_company_and_stage(self):
+        cases = (
+            ("https://boards.greenhouse.io/nvidia/jobs/4172", "nvidia", "gh-4172"),
+            ("https://job-boards.greenhouse.io/stripe/jobs/999", "stripe", "gh-999"),
+            ("https://jobs.lever.co/figma/8ac3f1e2-0000-4aaa-bbbb-ccccdddd", "figma", None),
+            ("https://jobs.ashbyhq.com/janestreet/1a2b3c4d-5e6f", "janestreet", None),
+            ("https://nvidia.wd5.myworkdayjobs.com/en-US/careers/job/Remote/SWE-Intern_JR123", "nvidia", None),
+        )
+        for url, company, ident in cases:
+            with self.subTest(url=url):
+                got = self.suggest.classify(url, "SWE Intern | Careers")
+                self.assertEqual(got["type"], "application")
+                self.assertIn(("company", company), got["extras"])
+                self.assertIn(("stage", "applied"), got["extras"])
+                if ident:
+                    self.assertEqual(got["ident"], ident)
+
+    def test_everything_else_is_ignored(self):
+        # The allowlist is the privacy story: history it cannot log, it cannot see.
+        for url in (
+            "https://mail.google.com/mail/u/0/#inbox",
+            "https://www.rbcroyalbank.com/accounts",
+            "https://leetcode.com/contest/weekly-380/",
+            "https://github.com/KassaSana03/personaltracker",
+        ):
+            with self.subTest(url=url):
+                self.assertIsNone(self.suggest.classify(url, "whatever"))
+
+    def test_a_login_or_error_page_still_logs_the_posting_it_points_at(self):
+        # Real history is full of these: the tab said "Sign In" while the URL was a job.
+        for title in ("Sign In", "Create Account", "Workday is currently unavailable.",
+                      "Careers", "", "Jobs - DAT Careers"):
+            with self.subTest(title=title):
+                got = self.suggest.classify(
+                    "https://nvidia.wd5.myworkdayjobs.com/en-US/careers/job/Remote/SWE_JR123",
+                    title,
+                )
+                self.assertEqual(got["type"], "application")
+                # Workday puts the title in the URL, so the row is still labelled.
+                self.assertEqual(got["detail"], "SWE JR123")
+
+    def test_a_job_url_with_no_readable_slug_falls_back_to_the_company(self):
+        got = self.suggest.classify(
+            "https://jobs.ashbyhq.com/janestreet/1a2b3c4d-5e6f-0000-1111-222233334444", ""
+        )
+        self.assertEqual(got["detail"], "janestreet posting")
+
+    def test_one_posting_reached_two_ways_is_one_proposal(self):
+        when = datetime.now() - timedelta(hours=1)
+        self.chromium_db(
+            ("https://jobs.smartrecruiters.com/LuxeMedia/743999", "Web Developer Intern", when),
+            ("https://jobs.smartrecruiters.com/LuxeMedia/744000", "Web Developer Intern",
+             when + timedelta(minutes=1)),
+        )
+        got = self.gather()
+        self.assertEqual(len(got), 1)
+        self.assertLess(abs((got[0]["when"] - when).total_seconds()), 1)
+
+    def test_two_different_jobs_at_one_company_stay_separate(self):
+        when = datetime.now() - timedelta(hours=1)
+        self.chromium_db(
+            ("https://boards.greenhouse.io/nvidia/jobs/1", "SWE Intern", when),
+            ("https://boards.greenhouse.io/nvidia/jobs/2", "ML Intern", when),
+        )
+        self.assertEqual(len(self.gather()), 2)
+
+    def test_a_real_job_title_is_kept(self):
+        got = self.suggest.classify(
+            "https://nvidia.wd5.myworkdayjobs.com/en-US/careers/job/Remote/SWE_JR123",
+            "Software Engineer Intern, Compute Architecture",
+        )
+        self.assertEqual(got["detail"], "Software Engineer Intern, Compute Architecture")
+
+    def test_proposals_group_by_working_day_then_clock(self):
+        # A 00:30 visit belongs to the night before; the table must still read in order.
+        base = datetime.now().replace(hour=18, minute=0, second=0, microsecond=0)
+        if base > datetime.now():
+            base -= timedelta(days=1)
+        self.chromium_db(
+            ("https://leetcode.com/problems/late-one/", "late", base + timedelta(hours=6, minutes=30)),
+            ("https://leetcode.com/problems/early-one/", "early", base),
+        )
+        got = self.gather()
+        self.assertEqual([p["detail"] for p in got], ["early-one", "late-one"])
+        self.assertEqual(got[0]["day"], got[1]["day"])
+
+    def test_detail_uses_the_job_title_not_the_whole_page_title(self):
+        got = self.suggest.classify(
+            "https://boards.greenhouse.io/nvidia/jobs/4172",
+            "Software Engineer Intern - Summer 2027 | NVIDIA",
+        )
+        self.assertEqual(got["detail"], "Software Engineer Intern - Summer 2027")
+
+    # -- reading history --
+
+    def test_visits_are_read_from_chromium_and_firefox(self):
+        earlier = datetime.now() - timedelta(hours=3)
+        later = datetime.now() - timedelta(hours=1)
+        self.chromium_db(("https://leetcode.com/problems/two-sum/", "Two Sum", earlier))
+        self.firefox_db(("https://jobs.lever.co/figma/8ac3f1e2-0000-4aaa", "SWE Intern", later))
+        got = self.gather()
+        # Both browsers are read, and the two epochs land on the same timeline.
+        self.assertEqual([p["type"] for p in got], ["leetcode", "application"])
+        self.assertLess(abs((got[0]["when"] - earlier).total_seconds()), 1)
+        self.assertLess(abs((got[1]["when"] - later).total_seconds()), 1)
+
+    def test_visits_older_than_the_window_are_ignored(self):
+        self.chromium_db(
+            ("https://leetcode.com/problems/old-one/", "old", datetime.now() - timedelta(days=9)),
+            ("https://leetcode.com/problems/new-one/", "new", datetime.now() - timedelta(hours=1)),
+        )
+        self.assertEqual([p["detail"] for p in self.gather(days=3)], ["new-one"])
+
+    def test_the_same_problem_opened_all_evening_is_one_proposal(self):
+        base = datetime.now().replace(hour=20, minute=0, second=0, microsecond=0)
+        if base > datetime.now():
+            base -= timedelta(days=1)
+        self.chromium_db(
+            ("https://leetcode.com/problems/two-sum/", "Two Sum", base),
+            ("https://leetcode.com/problems/two-sum/", "Two Sum", base + timedelta(minutes=20)),
+            ("https://leetcode.com/problems/two-sum/description/", "Two Sum", base + timedelta(minutes=40)),
+        )
+        got = self.gather()
+        self.assertEqual(len(got), 1)
+        # The first visit of the day is the one that gets logged.
+        self.assertLess(abs((got[0]["when"] - base).total_seconds()), 1)
+
+    def test_an_unreadable_database_is_skipped_not_fatal(self):
+        bad = os.path.join(self.vault, "not-a-db")
+        tracker.write_text(bad, "this is not sqlite")
+        self.assertEqual(self.suggest.read_visits("chromium", bad, datetime.now()), [])
+        missing = os.path.join(self.vault, "gone", "History")
+        self.assertEqual(self.suggest.read_visits("chromium", missing, datetime.now()), [])
+
+    def test_a_locked_database_is_copied_before_reading(self):
+        # Chrome holds the file open; the reader must never touch the original.
+        path = self.chromium_db(
+            ("https://leetcode.com/problems/two-sum/", "Two Sum", datetime.now())
+        )
+        before = os.path.getmtime(path)
+        holder = sqlite3.connect(path)
+        holder.execute("BEGIN EXCLUSIVE")
+        try:
+            self.assertEqual(len(self.gather()), 1)
+        finally:
+            holder.close()
+        self.assertEqual(os.path.getmtime(path), before)
+
+    # -- writing --
+
+    def args(self, **kwargs):
+        defaults = {"days": 3, "yes": True, "dry_run": False}
+        defaults.update(kwargs)
+        return Namespace(**defaults)
+
+    def run_suggest(self, **kwargs):
+        os.environ["TRACKER_BROWSERS"] = os.pathsep.join(p for _kind, p in self.dbs)
+        self.addCleanup(os.environ.pop, "TRACKER_BROWSERS", None)
+        out, err = StringIO(), StringIO()
+        old = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = out, err
+        try:
+            self.suggest.cmd_suggest(self.args(**kwargs))
+        finally:
+            sys.stdout, sys.stderr = old
+        return out.getvalue(), err.getvalue()
+
+    def test_applied_proposals_land_as_normal_events_with_provenance(self):
+        when = datetime.now() - timedelta(hours=1)
+        self.chromium_db(
+            ("https://leetcode.com/problems/two-sum/", "Two Sum", when),
+            ("https://boards.greenhouse.io/nvidia/jobs/4172", "SWE Intern | NVIDIA", when),
+        )
+        out, _ = self.run_suggest()
+        self.assertIn("added 2 event(s)", out)
+
+        day = tracker.working_date(when).isoformat()
+        events, _ = tracker.load_events(self.vault)
+        by_type = {f["type"]: f for f in events}
+        self.assertEqual(by_type["leetcode"]["detail"], "two-sum")
+        self.assertEqual(by_type["leetcode"]["id"], "lc-two-sum")
+        self.assertEqual(by_type["leetcode"]["src"], "suggest")
+        self.assertEqual(by_type["application"]["company"], "nvidia")
+        self.assertEqual(by_type["application"]["stage"], "applied")
+        self.assertIn(day, os.listdir(os.path.join(self.vault, "daily"))[0])
+
+    def test_running_it_twice_adds_nothing(self):
+        self.chromium_db(
+            ("https://leetcode.com/problems/two-sum/", "Two Sum", datetime.now() - timedelta(hours=1))
+        )
+        self.run_suggest()
+        before = tracker.read_text(self.daily(tracker.working_date().isoformat()))
+        out, _ = self.run_suggest()
+        self.assertIn("nothing new to propose", out)
+        self.assertEqual(tracker.read_text(self.daily(tracker.working_date().isoformat())), before)
+
+    def test_a_hand_logged_event_is_not_proposed_again(self):
+        # Same dedupe key as sync, and the state is the Markdown itself.
+        self.chromium_db(
+            ("https://leetcode.com/problems/two-sum/", "Two Sum", datetime.now() - timedelta(hours=1))
+        )
+        proposals = self.gather()
+        self.assertEqual(len(self.suggest.already_logged(self.vault, proposals)), 1)
+        self.write_daily(
+            tracker.working_date().isoformat(),
+            "## Log\n- [x] type:: leetcode | when:: 2026-08-31T09:00 | id:: lc-two-sum\n",
+        )
+        self.assertEqual(self.suggest.already_logged(self.vault, proposals), [])
+
+    def test_dry_run_writes_nothing(self):
+        self.chromium_db(
+            ("https://leetcode.com/problems/two-sum/", "Two Sum", datetime.now() - timedelta(hours=1))
+        )
+        out, _ = self.run_suggest(dry_run=True)
+        self.assertIn("two-sum", out)
+        self.assertFalse(os.path.exists(os.path.join(self.vault, "daily")))
+
+    def test_no_browser_history_is_a_clear_error(self):
+        os.environ["TRACKER_BROWSERS"] = os.path.join(self.vault, "nope", "History")
+        self.addCleanup(os.environ.pop, "TRACKER_BROWSERS", None)
+        err = StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            self.suggest.cmd_suggest(self.args())
+        self.assertIn("no browser history found", err.getvalue())
+
+    def test_selection_parsing(self):
+        parse = self.suggest.parse_selection
+        self.assertEqual(parse("a", 3), [0, 1, 2])
+        self.assertEqual(parse("", 3), [])
+        self.assertEqual(parse("n", 3), [])
+        self.assertEqual(parse("1,3", 3), [0, 2])
+        self.assertEqual(parse("1-3", 3), [0, 1, 2])
+        self.assertEqual(parse("3 1", 3), [0, 2])
+        self.assertEqual(parse("2,9", 3), [1])       # out of range is dropped
+        self.assertEqual(parse("nonsense", 3), [])   # never guesses
 
 
 if __name__ == "__main__":

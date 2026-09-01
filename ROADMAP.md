@@ -95,8 +95,9 @@ still no daemon, no server):
   an `id::` field (e.g. commit hash). Before appending, `sync` scans the target day's
   note for that id and skips duplicates. State stays in the Markdown; re-running is
   always safe.
-- **Canvas** (assignments/due dates) and **LeetCode** (accepted submissions) follow the
-  same pattern only if two weeks of manual logging showed you actually track them.
+- **LeetCode** arrived in Phase 6 by a different route — browser history rather than
+  the site's API, proposed rather than imported. **Canvas** follows the same pattern
+  only if two weeks of manual logging show you actually track it.
 - Ingested vs hand-logged stays distinguishable (`src:: sync`), so you can always
   audit where a number came from.
 
@@ -144,6 +145,32 @@ Why a window is not a violation of the exclusion list below: it adds no server, 
 dependency, no account, and no state. It is capture, which is the one thing this
 roadmap says is worth spending on. A *dashboard* GUI would be the violation —
 Obsidian already renders that, which is why `t dash` writes notes instead.
+
+## Phase 6 — capture without typing — **`t suggest` shipped**
+
+The goal behind the whole project: see what you have been doing without having to log
+it. `sync` did that for commits; this does it for the two things that were still
+typed by hand.
+
+- **`t suggest`** reads local browser history (Chromium + Firefox, stdlib `sqlite3`,
+  file copied before reading so it works while the browser is open) and proposes
+  leetcode problems and job applications. Company, job title and timestamp all come
+  free from the URL; `id::` and `src:: suggest` make re-running safe and auditable.
+- **The allowlist is the privacy boundary.** It matches leetcode problem URLs and five
+  job boards, and is blind to every other page. It cannot log what it cannot match.
+- **It proposes; you pick.** History proves a page was *opened*, never that a problem
+  was solved or an application submitted. Auto-writing those would break the one
+  principle above — a number would stop meaning "I did a thing". Picked leetcode rows
+  ask for a difficulty, since that is what history cannot know and what catches an
+  easy-only grind.
+- **Deliberately not built**: a foreground-window watcher. It needs a background
+  process, measures attention rather than accomplishment, and would read every window
+  title on the machine into a synced vault. If full activity tracking is ever wanted,
+  run ActivityWatch and read its database — do not grow one here.
+- **Deliberately not built**: LeetCode's GraphQL API. It would give exact solved-counts
+  with difficulty, and it was offered and declined: the no-network rule is worth more
+  than the precision. Application stages (OA, phone, onsite) live in email and stay
+  manual for the same reason.
 
 ## Definition of "solid" (the quality bar per phase)
 

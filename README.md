@@ -51,6 +51,7 @@ t month  # = t stats 30
 t dash  [--weeks N]
 t sync   [--repo PATH ...] [--root DIR ...] [--days N] [--author EMAIL] [--dry-run] [--no-dash]
 t review [--week YYYY-MM-DD] [--print]
+t suggest [--days N] [--yes] [--dry-run]
 t label
 t gui
 t complete [command]   # completion words, for the shell
@@ -146,6 +147,38 @@ Imported lines carry two extra fields:
 - `src:: sync` — ingested, not hand-logged, so you can always audit where a number came from.
 
 Commits file by the same 04:00 rollover as everything else: a 01:30 commit lands on the previous day's note. A missing `git`, a bad path, or a repo that errors is a warning on stderr — the other repos still import.
+
+## Logging without logging — `t suggest`
+
+```
+t suggest                  # propose from the last 3 days, pick what to keep
+t suggest --days 7
+t suggest --dry-run        # look, write nothing
+t suggest --yes            # apply everything, no prompt
+```
+
+Reads evidence already sitting on this machine and proposes events. **Nothing is written until you pick.**
+
+```
+#   day         at     type         detail                                        from
+1   2026-08-17  04:13  leetcode     longest-palindromic-substring                 leetcode
+2   2026-08-17  06:23  leetcode     meeting-rooms-ii                              leetcode
+3   2026-08-19  21:59  application  Software Engineer, Agents & Automations       ashby
+
+A page you opened is not a problem you solved or a job you applied to.
+Pick only what you actually finished.
+Apply which? [a]ll, [n]one, or numbers like 1,3-4:
+```
+
+Picked leetcode rows then ask for a difficulty (`e`/`m`/`h`, Enter to skip), because the difficulty mix is the one number history can't know and the one that catches an easy-only grind.
+
+**Where it looks.** Chromium history (Chrome, Edge, Brave, Vivaldi, Opera) and Firefox's `places.sqlite`, via stdlib `sqlite3`. The file is copied before reading, so it works while the browser is open and never touches your original. `TRACKER_BROWSERS` overrides discovery with an explicit `;`-separated list of history files.
+
+**What it can see** is an allowlist, and that's the privacy story: `leetcode.com/problems/...`, plus Greenhouse, Lever, Ashby, SmartRecruiters and Workday job URLs. Every other page in your history is invisible to it — it cannot log what it cannot match, so it never reads your mail, your bank or anything else into the vault.
+
+**What it can't know.** History proves a page was *opened*, never that a problem was solved or an application submitted. That's exactly why it proposes instead of writing, and why `--yes` is for when you've already looked. Application *stages* (OA, phone, onsite, offer) arrive by email, which is out of reach under the no-network rule — those stay manual, and they're the ones you remember anyway.
+
+Proposals carry `id::` and `src:: suggest`, so re-running is safe and you can always audit where a number came from. Commits don't appear here: `t sync` imports them exactly, and a commit needs no confirmation because it's already a completion.
 
 ## Closing the loop — `t review`
 
