@@ -81,14 +81,16 @@ All computed from the Markdown at read time. No cache, no index — same rule as
   not "decline". Beware Goodhart: pick 3–4 metrics you actually believe in — apps/week,
   problems/week by difficulty, study min/topic, streak — and resist adding more.
 
-## Phase 3 — automatic ingestion (only after Phases 0–2 prove what's worth it)
+## Phase 3 — automatic ingestion — **shipped (git only)**
 
 One new command, `t sync`, run manually (later, optionally, by Windows Task Scheduler —
 still no daemon, no server):
 
-- **Git/GitHub**: commits and PR events via `gh` CLI / local `git log` across your
-  repos. Network allowed here — `sync` is not the write path in spirit; it's batch
-  import, and a failure just means "run it again later".
+- **Git**: commits across your repos via local `git log`. Repos come from `--repo` /
+  `--root` or the `TRACKER_REPOS` env var. `sync` is not the write path in spirit; it's
+  batch import, and a failure just means "run it again later".
+  - **Deferred: PR events via `gh`.** It needs auth and a network round-trip, and no
+    line in `FRICTION.md` asks for it yet. Build it when one does.
 - **Idempotency rule** (the thing that makes sync safe): every ingested event carries
   an `id::` field (e.g. commit hash). Before appending, `sync` scans the target day's
   note for that id and skips duplicates. State stays in the Markdown; re-running is
@@ -98,15 +100,18 @@ still no daemon, no server):
 - Ingested vs hand-logged stays distinguishable (`src:: sync`), so you can always
   audit where a number came from.
 
-## Phase 4 — close the loop (~ongoing)
+## Phase 4 — close the loop — **`t review` shipped**
 
 Numbers only change behavior if you look at them on a schedule.
 
 - **`t review`**: generates `reviews/YYYY-Www.md` — last week's numbers pre-filled,
   plus three prompts (what worked / what slipped / one change next week). Five minutes
-  every Sunday; this is where "see patterns" becomes "act on patterns".
+  every Sunday; this is where "see patterns" becomes "act on patterns". Written once and
+  never regenerated: it holds your handwriting.
 - `label` grows only if used: batch mode over a date range, topics learned from what
   you actually study.
+  - **Deferred, on purpose.** "Only if used" is the gate, and `FRICTION.md` is empty.
+    Building it now would break the rule the whole roadmap hangs on.
 
 ## Definition of "solid" (the quality bar per phase)
 
@@ -116,7 +121,8 @@ Numbers only change behavior if you look at them on a schedule.
 3. **Tested invariants**: parser and inserter covered by `unittest`; run before each
    commit.
 4. **One file, stdlib only** stays true through Phase 4. If `tracker.py` passes ~1500
-   lines, split by command — not before.
+   lines, split by command — not before. (It sits near 1350 after Phase 4; the
+   `# ---- section ----` banners carry navigability until then.)
 5. **Anything can fail without losing data**: sync can crash mid-run, stats can hit a
    corrupt line — worst case is a warning, never a corrupted note.
 
