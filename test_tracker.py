@@ -233,6 +233,27 @@ class TestTodayAndUndo(VaultTestCase):
         self.assertIn("type:: commit", out)
         self.assertNotIn("type:: fake", out)
 
+    def test_today_shows_events_not_template_scaffolding(self):
+        self.write_daily(
+            "2026-08-31",
+            "# 2026-08-31\n## Log\n"
+            "<!-- Tick a box to log it. -->\n"
+            "- [ ] type:: leetcode | diff:: easy\n"
+            "- [ ] type:: study | topic:: algo\n"
+            "- [x] type:: commit | when:: 2026-08-31T09:00 | detail:: real\n",
+        )
+        out, _ = self.run_cli("today", "--date", "2026-08-31")
+        self.assertIn("detail:: real", out)
+        self.assertNotIn("Tick a box", out)
+        self.assertNotIn("- [ ]", out)
+        self.assertIn("2 unticked boxes waiting", out)
+
+    def test_today_on_a_fresh_template_note_says_no_events(self):
+        self.write_daily("2026-08-31", "## Log\n- [ ] type:: leetcode | diff:: easy\n")
+        out, _ = self.run_cli("today", "--date", "2026-08-31")
+        self.assertIn("(no events)", out)
+        self.assertIn("1 unticked box waiting", out)
+
     def test_undo_removes_only_the_last_tool_line(self):
         original = (
             "# 2026-08-31\n\n## Log\n"
@@ -353,6 +374,30 @@ class TestImplicitTrack(VaultTestCase):
         out, _ = self.run_cli()
         self.assertIn("VAULT_PATH is not set", out)
         self.assertIn("t dash", out)
+
+    def test_output_hardening_survives_any_stream(self):
+        class Refuses:
+            def reconfigure(self, **_kwargs):
+                raise ValueError("no")
+
+        class Plain:
+            pass
+
+        calls = []
+
+        class Records:
+            def reconfigure(self, **kwargs):
+                calls.append(kwargs)
+
+        # None is what pythonw hands you; the rest are the odd cases.
+        tracker.harden_output_encoding((None, Plain(), Refuses(), Records()))
+        self.assertEqual(calls, [{"errors": "replace"}])
+
+    def test_a_non_ascii_detail_prints_without_crashing(self):
+        # git subjects and page titles are not ours to keep ASCII.
+        self.run_cli("track", "commit", "fixed the em-dash — again", "--date", "2026-08-31")
+        out, _ = self.run_cli("today", "--date", "2026-08-31")
+        self.assertIn("em-dash", out)
 
     def test_parser_exposes_every_subcommand(self):
         parser = tracker.build_parser()
@@ -1096,6 +1141,36 @@ class TestSetup(VaultTestCase):
         with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
             self.bootstrap.cmd_setup(Namespace(path=None, profile=False))
         self.assertIn("give setup a path", err.getvalue())
+
+    def test_it_offers_the_vaults_obsidian_already_knows(self):
+        appdata = os.path.join(self.vault, "appdata")
+        os.makedirs(os.path.join(appdata, "obsidian"))
+        tracker.write_text(
+            os.path.join(appdata, "obsidian", "obsidian.json"),
+            '{"vaults": {"a": {"path": "C:\\\\old", "ts": 1}, '
+            '"b": {"path": "C:\\\\newest", "ts": 9}}}',
+        )
+        os.environ["APPDATA"] = appdata
+        os.environ.pop("VAULT_PATH")
+        self.addCleanup(os.environ.pop, "APPDATA", None)
+
+        err = StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            self.bootstrap.cmd_setup(Namespace(path=None, profile=False))
+        message = err.getvalue()
+        # Most recently opened first, and each line is ready to paste.
+        self.assertLess(message.index("C:\\newest"), message.index("C:\\old"))
+        self.assertIn('t setup "C:\\newest"', message)
+
+    def test_a_broken_obsidian_file_is_not_fatal(self):
+        appdata = os.path.join(self.vault, "appdata")
+        os.makedirs(os.path.join(appdata, "obsidian"))
+        os.environ["APPDATA"] = appdata
+        self.addCleanup(os.environ.pop, "APPDATA", None)
+        for body in ("not json", "{}", '{"vaults": []}', '{"vaults": {"a": 3}}'):
+            with self.subTest(body=body):
+                tracker.write_text(os.path.join(appdata, "obsidian", "obsidian.json"), body)
+                self.assertEqual(self.bootstrap.known_obsidian_vaults(), [])
 
     def test_vault_path_is_the_default_target(self):
         os.environ["VAULT_PATH"] = self.target

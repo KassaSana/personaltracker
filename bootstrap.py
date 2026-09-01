@@ -9,9 +9,8 @@ Your PowerShell profile is yours; setup prints the block and only appends it whe
 you pass --profile.
 """
 
+import json
 import os
-import shutil
-import sys
 
 import tracker
 
@@ -46,6 +45,33 @@ def repo_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def known_obsidian_vaults():
+    """Vault paths Obsidian already knows, most recently opened first.
+
+    Nobody should have to retype a path their editor already has. Any surprise in
+    that file means no suggestions, never a crash.
+    """
+    root = os.environ.get("APPDATA")
+    if not root:
+        return []
+    path = os.path.join(root, "obsidian", "obsidian.json")
+    if not os.path.isfile(path):
+        return []
+    try:
+        data = json.loads(tracker.read_text(path))
+        vaults = data["vaults"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    if not isinstance(vaults, dict):
+        return []
+
+    entries = []
+    for value in vaults.values():
+        if isinstance(value, dict) and value.get("path"):
+            entries.append((value.get("ts") or 0, value["path"]))
+    return [path for _ts, path in sorted(entries, key=lambda e: e[0], reverse=True)]
+
+
 def resolve_target(raw):
     """Where the vault goes: the argument, else VAULT_PATH, else nothing doing."""
     if raw:
@@ -53,7 +79,14 @@ def resolve_target(raw):
     existing = os.environ.get("VAULT_PATH")
     if existing:
         return os.path.abspath(os.path.expanduser(existing))
-    tracker.die("give setup a path: t setup \"D:\\path\\to\\vault\"")
+
+    message = ['give setup a path:  t setup "D:\\path\\to\\vault"']
+    known = known_obsidian_vaults()
+    if known:
+        message.append("")
+        message.append("Obsidian already knows these, newest first:")
+        message += ['  t setup "%s"' % path for path in known]
+    tracker.die("\n".join(message))
 
 
 def seed_file(path, content, created, kept):

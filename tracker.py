@@ -305,6 +305,8 @@ def cmd_track(args):
 
 
 def cmd_today(args):
+    """What is logged today. Events only: a note seeded from the template is mostly
+    unticked boxes and comments, and none of that is something you did."""
     vault = vault_path()
     day = parse_iso_date(args.date) if args.date else working_date()
     path = daily_path(vault, day)
@@ -312,13 +314,21 @@ def cmd_today(args):
     if not os.path.isfile(path):
         print("  (no note)")
         return
-    lines = [ln.rstrip("\r") for ln in log_section(read_text(path)).splitlines()]
-    lines = [ln for ln in lines if ln.strip()]
-    if not lines:
+
+    events, waiting = [], 0
+    for raw in log_section(read_text(path)).splitlines():
+        line = raw.rstrip("\r").strip()
+        if COMPLETED_TASK_RE.match(line):
+            events.append(line)
+        elif line.startswith("- [ ]"):
+            waiting += 1
+
+    if not events:
         print("  (no events)")
-        return
-    for line in lines:
+    for line in events:
         print("  %s" % line)
+    if waiting:
+        print("  (%d unticked box%s waiting)" % (waiting, "" if waiting == 1 else "es"))
 
 
 def iter_line_spans(content, start, end):
@@ -1588,7 +1598,25 @@ def build_parser():
     return parser
 
 
+def harden_output_encoding(streams):
+    """Never die while printing someone else's text.
+
+    Generated text is kept ASCII on purpose, but commit subjects and page titles are
+    not ours: an em-dash reaching a cp1252 console raises UnicodeEncodeError and takes
+    the command down. Degrade the character, not the run.
+    """
+    for stream in streams:
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
 def main(argv=None):
+    harden_output_encoding((sys.stdout, sys.stderr))
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
         # A bare `t` should teach, not scold: argparse's "required" usage blob helps
