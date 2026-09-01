@@ -31,8 +31,14 @@ VALID_TYPES = (
 
 SUBCOMMANDS = (
     "track", "today", "undo", "stats", "week", "month", "dash", "sync", "review",
-    "label", "suggest", "gui", "setup", "complete",
+    "label", "suggest", "gui", "setup", "watch", "complete",
 )
+
+# `time` lines are written by `t watch` only: measured attention, not completion.
+# They feed watch.py's time tables and are excluded from every count, streak and
+# trend -- a decline in the chart must mean a decline in you, and hours are not
+# output.
+TIME_TYPE = "time"
 
 # `t week` is `t stats 7` under a name you actually reach for.
 STATS_ALIASES = (("week", "7", "Last 7 days"), ("month", "30", "Last 30 days"))
@@ -513,6 +519,8 @@ def summarize(events):
     study_minutes = Counter()
     sessions_without_duration = 0
     for fields in events:
+        if fields["type"] == TIME_TYPE:
+            continue
         type_counts[fields["type"]] += 1
         if fields["type"] != "study":
             continue
@@ -525,7 +533,7 @@ def summarize(events):
 
 
 def logged_days(events):
-    return {fields["_date"] for fields in events}
+    return {f["_date"] for f in events if f["type"] != TIME_TYPE}
 
 
 def streak(days, today, upto=None):
@@ -571,6 +579,8 @@ def weekly_buckets(events, weeks, today):
     starts = [current_week - timedelta(weeks=i) for i in range(weeks)]
     by_week = defaultdict(list)
     for fields in events:
+        if fields["type"] == TIME_TYPE:
+            continue
         by_week[week_start(fields["_date"])].append(fields)
 
     buckets = []
@@ -796,6 +806,15 @@ def dashboard_markdown(events, buckets, today):
         lines += markdown_table(diff[0], diff[1])
         lines.append("")
 
+    window_start = today - timedelta(days=DASHBOARD_TOPIC_DAYS - 1)
+    times = sibling_module("watch").time_report(
+        [f for f in events if window_start <= f["_date"] <= today]
+    )
+    if times:
+        lines += ["## Time by category (last %d days)" % DASHBOARD_TOPIC_DAYS, ""]
+        lines += markdown_table(*times)
+        lines.append("")
+
     lines += ["## Streaks", ""]
     for line in streak_lines(events, today):
         lines.append("- " + line.strip())
@@ -890,6 +909,13 @@ def cmd_stats(args):
             print("")
             print("leetcode by difficulty")
             print_lines(render_table(diff[0], diff[1]))
+        times = sibling_module("watch").time_weekly_report(
+            [f for f in all_events if f["_date"] >= week_window], weeks, today
+        )
+        if times:
+            print("")
+            print("time by category")
+            print_lines(render_table(*times))
     else:
         n = int(args.days)
         window = [f for f in all_events if report_start <= f["_date"] <= today]
@@ -910,6 +936,11 @@ def cmd_stats(args):
             print("  (none)")
         if missing_duration:
             print("  sessions without duration: %s" % missing_duration)
+
+        times = sibling_module("watch").time_report(window)
+        if times:
+            print("time by category")
+            print_lines("  " + line for line in render_table(*times))
 
         days = len(logged_days(window))
         print("logging: %s of %s days had an event" % (days, n))
@@ -1215,6 +1246,12 @@ def cmd_setup(args):
     sibling_module("bootstrap").cmd_setup(args)
 
 
+def cmd_watch(args):
+    """Measure foreground time into `time` events. Lives in watch.py: the only
+    code that reads window titles, and they never leave its memory."""
+    sibling_module("watch").cmd_watch(args)
+
+
 def cmd_complete(args):
     """Words the shell may offer after `t`. Derived from the parser, never a
     second list to keep in sync: a new flag is completable the day it exists."""
@@ -1236,6 +1273,7 @@ CHEATSHEET = (
     ("read", "t week | t month | t stats --weeks 8", "counts, streaks, trends"),
     ("notes", "t dash", "write Stats.md and Dashboard.md"),
     ("import", "t sync", "pull in git commits"),
+    ("measure", "t watch", "log focused time by category"),
     ("propose", "t suggest", "leetcode and applications from history"),
     ("close", "t review", "last week's numbers plus three prompts"),
 )
@@ -1367,6 +1405,12 @@ def build_parser():
     gui_p = sub.add_parser("gui", help="Open the quick-add window")
     gui_p.set_defaults(func=cmd_gui)
 
+    watch_p = sub.add_parser("watch", help="Watch the foreground window; log time by category")
+    watch_p.add_argument("--interval", metavar="SEC", type=int, default=5, help="Sample every SEC seconds")
+    watch_p.add_argument("--idle", metavar="SEC", type=int, default=180, help="Stop the clock after SEC seconds without input")
+    watch_p.add_argument("--status", action="store_true", help="Report whether a watcher is running")
+    watch_p.set_defaults(func=cmd_watch)
+
     complete_p = sub.add_parser("complete", help="List completion words for the shell")
     complete_p.add_argument("word", nargs="?", help="Subcommand whose flags to list")
     complete_p.set_defaults(func=cmd_complete)
@@ -1403,6 +1447,9 @@ def main(argv=None):
         return
     if not argv[0].startswith("-"):
         # `t commit "msg"` means `track commit "msg"`; subcommand names still win.
+        if argv[0] == TIME_TYPE:
+            # Measured attention cannot be typed: a hand-written hour is a guess.
+            die("time events are written by `t watch`, never by hand.")
         if argv[0] in VALID_TYPES:
             argv.insert(0, "track")
         elif argv[0] not in SUBCOMMANDS:

@@ -16,6 +16,7 @@ from io import StringIO
 import label
 import review
 import tracker
+import watch
 
 
 class VaultTestCase(unittest.TestCase):
@@ -1489,6 +1490,145 @@ class TestSuggest(VaultTestCase):
         self.assertEqual(parse("3 1", 3), [0, 2])
         self.assertEqual(parse("2,9", 3), [1])       # out of range is dropped
         self.assertEqual(parse("nonsense", 3), [])   # never guesses
+
+
+class TestWatch(VaultTestCase):
+    """watch.py through its pure parts only -- no Windows API in the suite,
+    the same rule the GUI tests follow."""
+
+    def minute(self, m):
+        return datetime(2026, 8, 31, 10, 0) + timedelta(minutes=m)
+
+    def feed_run(self, sessions, spec):
+        """spec: (start_minute, end_minute, category) sampled every 30 seconds."""
+        flushed = []
+        for start, end, category in spec:
+            t = self.minute(start)
+            while t < self.minute(end):
+                flushed += sessions.feed(t, category)
+                t += timedelta(seconds=30)
+        return flushed
+
+    def test_classify_defaults_and_other(self):
+        self.assertEqual(watch.classify("chrome.exe", "two-sum - LeetCode.com", ()), "leetcode")
+        self.assertEqual(watch.classify("Code.exe", "tracker.py - repo", ()), "project")
+        self.assertEqual(watch.classify("chrome.exe", "jobs.ashbyhq.com - Apply", ()), "applications")
+        self.assertEqual(watch.classify("notepad.exe", "untitled", ()), "other")
+
+    def test_classify_user_rules_win_and_parse_is_tolerant(self):
+        rules = watch.parse_rules(
+            "# comment\n\nnot a rule\nleetcode.com -> study\nblender -> project\n"
+        )
+        self.assertEqual(rules, [("leetcode.com", "study"), ("blender", "project")])
+        self.assertEqual(watch.classify("chrome.exe", "LeetCode.com", rules), "study")
+        self.assertEqual(watch.classify("blender.exe", "donut", rules), "project")
+
+    def test_session_basic_and_short_dropped(self):
+        sessions = watch.Sessions()
+        flushed = self.feed_run(sessions, [(0, 10, "project"), (10, 11, "other")])
+        flushed += sessions.finish()
+        # 10 minutes of project survives; the 1-minute tail is noise.
+        self.assertEqual([(m, c) for _s, m, c in flushed], [(10, "project")])
+        self.assertEqual(flushed[0][0], self.minute(0))
+
+    def test_brief_interruption_merges(self):
+        sessions = watch.Sessions()
+        flushed = self.feed_run(
+            sessions, [(0, 5, "project"), (5, 6, "other"), (6, 12, "project")]
+        )
+        flushed += sessions.finish()
+        # A one-minute alt-tab does not split the session or end it.
+        self.assertEqual([(m, c) for _s, m, c in flushed], [(12, "project")])
+
+    def test_long_interruption_splits_and_interloper_counts_from_its_start(self):
+        sessions = watch.Sessions()
+        flushed = self.feed_run(
+            sessions, [(0, 6, "project"), (6, 12, "assignment")]
+        )
+        flushed += sessions.finish()
+        self.assertEqual([(m, c) for _s, m, c in flushed],
+                         [(6, "project"), (6, "assignment")])
+        # The assignment clock started when it first appeared, not after the gap.
+        self.assertEqual(flushed[1][0], self.minute(6))
+
+    def test_idle_ends_session_without_padding(self):
+        sessions = watch.Sessions()
+        flushed = self.feed_run(sessions, [(0, 8, "project")])
+        flushed += sessions.feed(self.minute(8), None)
+        flushed += self.feed_run(sessions, [(8, 15, None)])
+        flushed += sessions.finish()
+        self.assertEqual(len(flushed), 1)
+        _start, minutes, _cat = flushed[0]
+        # Ends at the last active sample: idle minutes are never counted.
+        self.assertLessEqual(minutes, 8)
+
+    def test_chunk_flush_bounds_loss(self):
+        sessions = watch.Sessions()
+        flushed = self.feed_run(sessions, [(0, 70, "project")])
+        flushed += sessions.finish()
+        self.assertEqual([c for _s, _m, c in flushed], ["project"] * 3)
+        self.assertEqual(sum(m for _s, m, _c in flushed), 70)
+        self.assertTrue(all(m <= watch.CHUNK_MIN for _s, m, _c in flushed))
+
+    def test_write_sessions_appends_dedupes_and_preserves_bytes(self):
+        original = "# 2026-08-31\n\nprose stays\n\n## Log\n\n## Notes\n\nkeep me\n"
+        self.write_daily("2026-08-31", original)
+        session = [(datetime(2026, 8, 31, 14, 5), 47, "assignment")]
+        self.assertEqual(watch.write_sessions(self.vault, session), 1)
+        content = self.read_daily("2026-08-31")
+        self.assertIn(
+            "- [x] type:: time | when:: 2026-08-31T14:05 | detail:: assignment"
+            " | duration:: 47 | id:: w20260831T1405-assignment | src:: watch",
+            content,
+        )
+        self.assertTrue(content.startswith("# 2026-08-31\n\nprose stays\n\n## Log\n"))
+        self.assertTrue(content.endswith("## Notes\n\nkeep me\n"))
+        # A re-flush of the same session is a no-op, sync's own guarantee.
+        self.assertEqual(watch.write_sessions(self.vault, session), 0)
+
+    def test_time_events_never_count_as_completions(self):
+        self.write_daily("2026-08-31", "# d\n\n## Log\n"
+                         "- [x] type:: time | when:: 2026-08-31T09:00 | detail:: project | duration:: 90 | src:: watch\n"
+                         "- [x] type:: commit | when:: 2026-08-31T09:30 | detail:: fix\n")
+        self.write_daily("2026-08-30", "# d\n\n## Log\n"
+                         "- [x] type:: time | when:: 2026-08-30T09:00 | detail:: leetcode | duration:: 30 | src:: watch\n")
+        events, _ = tracker.load_events(self.vault)
+        counts, _minutes, _missing = tracker.summarize(events)
+        self.assertEqual(dict(counts), {"commit": 1})
+        # A watched-only day is not a logged day: hours are not output.
+        self.assertEqual(tracker.logged_days(events), {date(2026, 8, 31)})
+        buckets = tracker.weekly_buckets(events, 1, date(2026, 8, 31))
+        self.assertEqual(buckets[0]["total"], 1)
+
+    def test_time_report_pairs_hours_with_completions(self):
+        events = [
+            {"type": "time", "detail": "project", "duration": "90", "_date": date(2026, 8, 31)},
+            {"type": "time", "detail": "project", "duration": "45", "_date": date(2026, 8, 31)},
+            {"type": "time", "detail": "applications", "duration": "30", "_date": date(2026, 8, 31)},
+            {"type": "commit", "_date": date(2026, 8, 31)},
+            {"type": "commit", "_date": date(2026, 8, 31)},
+        ]
+        headers, rows = watch.time_report(events)
+        self.assertEqual(headers, ["category", "time", "chart", "done"])
+        self.assertEqual(rows[0][:2], ["project", "2h15m"])
+        self.assertEqual(rows[0][3], "2")
+        self.assertEqual(rows[1][:2], ["applications", "30m"])
+        self.assertEqual(rows[1][3], "")
+        self.assertIsNone(watch.time_report([{"type": "commit", "_date": date(2026, 8, 31)}]))
+
+    def test_time_weekly_report_buckets_by_week(self):
+        events = [
+            {"type": "time", "detail": "project", "duration": "60", "_date": date(2026, 8, 31)},
+            {"type": "time", "detail": "project", "duration": "30", "_date": date(2026, 8, 24)},
+        ]
+        headers, rows = watch.time_weekly_report(events, 2, date(2026, 8, 31))
+        self.assertEqual(headers, ["week", "project", "total"])
+        self.assertEqual(rows[0], ["2026-08-31", "1h00m", "1h00m"])
+        self.assertEqual(rows[1], ["2026-08-24", "30m", "30m"])
+
+    def test_hand_typed_time_event_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            self.run_cli("time", "assignment", "--duration", "60")
 
 
 if __name__ == "__main__":

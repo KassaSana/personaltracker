@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 
 import suggest
 import tracker
+import watch
 
 WINDOW_TITLE = "log"
 TODAY_LINES = 8
@@ -93,6 +94,13 @@ def numbers_lines(vault, weeks=NUMBERS_WEEKS, today=None):
     if topics:
         lines += ["", "study minutes by topic (%d days)" % NUMBERS_TOPIC_DAYS]
         lines += tracker.render_table(*topics)
+
+    times = watch.time_report(
+        [f for f in events if f["_date"] > today - timedelta(days=NUMBERS_TOPIC_DAYS)]
+    )
+    if times:
+        lines += ["", "time by category (%d days)" % NUMBERS_TOPIC_DAYS]
+        lines += tracker.render_table(*times)
 
     pipeline = tracker.pipeline_report(events)
     if pipeline:
