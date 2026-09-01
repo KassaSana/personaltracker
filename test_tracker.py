@@ -4,10 +4,11 @@
 import contextlib
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 
 import tracker
@@ -329,6 +330,272 @@ class TestNumbers(VaultTestCase):
         for argv in (("stats", "9"), ("stats", "--weeks", "0")):
             with self.subTest(argv=argv), self.assertRaises(SystemExit):
                 self.run_cli(*argv)
+
+
+def git_log_output(*records):
+    """Fake `git log --pretty=format:GIT_LOG_FORMAT` output."""
+    return "\n".join(tracker.GIT_FIELD_SEP.join(r) for r in records)
+
+
+class TestSync(VaultTestCase):
+    """Sync is batch import: re-running it must never duplicate or disturb anything."""
+
+    def setUp(self):
+        super().setUp()
+        self.repo = os.path.join(self.vault, "..", "repo")
+
+    def fake_git(self, log_text, email="me@example.com"):
+        """Stand in for the git subprocess so tests need no real repository."""
+        def run_git(_repo, argv):
+            if argv[:1] == ["config"]:
+                return email + "\n"
+            return log_text
+
+        self.patch(tracker, "run_git", run_git)
+        self.patch(tracker, "is_git_repo", lambda _path: True)
+        self.patch(tracker.shutil, "which", lambda _name: "git")
+
+    def patch(self, obj, name, value):
+        old = getattr(obj, name)
+        setattr(obj, name, value)
+        self.addCleanup(setattr, obj, name, old)
+
+    def sync(self, *argv):
+        return self.run_cli("sync", "--repo", self.repo, *argv)
+
+    def test_parse_git_log_skips_junk_records(self):
+        text = git_log_output(
+            ("a" * 40, "2026-08-31T09:00:00+00:00", "real subject"),
+            ("b" * 40, "not a date", "bad date"),
+        )
+        text += "\n\nonly-one-field\n"
+        commits = tracker.parse_git_log(text)
+        self.assertEqual([c["subject"] for c in commits], ["real subject"])
+        self.assertEqual(commits[0]["sha"], "a" * 40)
+
+    def test_parse_git_log_converts_offsets_to_local_time(self):
+        # 09:00 UTC is a fixed instant; whatever local zone the test runs in, the
+        # naive result must equal that instant rendered locally.
+        commits = tracker.parse_git_log(
+            git_log_output(("a" * 40, "2026-08-31T09:00:00+00:00", "s"))
+        )
+        expected = datetime(2026, 8, 31, 9, 0, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+        self.assertEqual(commits[0]["when"], expected)
+
+    def test_commits_land_on_daily_notes_with_sync_provenance(self):
+        self.fake_git(git_log_output((("a" * 40), "2026-08-31T14:22:00", "fixed onnx flag")))
+        self.sync("--days", "3650")
+        line = self.read_daily("2026-08-31").splitlines()[-1]
+        fields = tracker.parse_fields(tracker.COMPLETED_TASK_RE.match(line).group(1))
+        self.assertEqual(fields["type"], "commit")
+        self.assertEqual(fields["detail"], "fixed onnx flag")
+        self.assertEqual(fields["id"], "a" * 8)
+        self.assertEqual(fields["src"], "sync")
+        self.assertEqual(fields["repo"], "repo")
+
+    def test_04h_rollover_applies_to_commits(self):
+        self.fake_git(git_log_output((("a" * 40), "2026-09-01T01:30:00", "late night")))
+        self.sync("--days", "3650")
+        # A 01:30 commit belongs to the previous working day, same as a hand-logged one.
+        self.assertTrue(os.path.isfile(self.daily("2026-08-31")))
+        self.assertFalse(os.path.isfile(self.daily("2026-09-01")))
+
+    def test_second_sync_adds_nothing(self):
+        self.fake_git(
+            git_log_output(
+                (("a" * 40), "2026-08-31T14:22:00", "one"),
+                (("b" * 40), "2026-08-31T15:00:00", "two"),
+            )
+        )
+        self.sync("--days", "3650")
+        first = self.read_daily("2026-08-31")
+        out, _ = self.sync("--days", "3650")
+        self.assertEqual(self.read_daily("2026-08-31"), first)
+        self.assertIn("added 0 event(s)", out)
+        self.assertIn("2 already logged", out)
+
+    def test_sync_is_append_only_around_existing_content(self):
+        original = (
+            "# 2026-08-31\n\nprose\n\n## Log\n"
+            "- [x] type:: study | when:: 2026-08-31T09:00 | duration:: 30\n"
+            "\n## Notes\n\nkeep me\n"
+        )
+        self.write_daily("2026-08-31", original)
+        self.fake_git(git_log_output((("a" * 40), "2026-08-31T14:22:00", "one")))
+        self.sync("--days", "3650")
+
+        after = self.read_daily("2026-08-31")
+        added = [ln for ln in after.splitlines() if "id:: aaaaaaaa" in ln]
+        self.assertEqual(len(added), 1)
+        self.assertEqual(after.replace(added[0] + "\n", "", 1), original)
+
+    def test_commits_are_ordered_oldest_first_within_a_day(self):
+        # git log is newest-first; the note must still read chronologically.
+        self.fake_git(
+            git_log_output(
+                (("b" * 40), "2026-08-31T15:00:00", "later"),
+                (("a" * 40), "2026-08-31T09:00:00", "earlier"),
+            )
+        )
+        self.sync("--days", "3650")
+        lines = [ln for ln in self.read_daily("2026-08-31").splitlines() if "src:: sync" in ln]
+        self.assertIn("earlier", lines[0])
+        self.assertIn("later", lines[1])
+
+    def test_dry_run_writes_nothing(self):
+        self.fake_git(git_log_output((("a" * 40), "2026-08-31T14:22:00", "one")))
+        out, _ = self.sync("--days", "3650", "--dry-run")
+        self.assertIn("would add 1 event(s)", out)
+        self.assertFalse(os.path.exists(self.daily("2026-08-31")))
+
+    def test_unreadable_repo_warns_and_is_not_fatal(self):
+        self.patch(tracker.shutil, "which", lambda _name: "git")
+        self.patch(tracker, "is_git_repo", lambda path: path.endswith("good"))
+        self.patch(
+            tracker,
+            "run_git",
+            lambda _repo, argv: "me@example.com\n" if argv[:1] == ["config"]
+            else git_log_output((("a" * 40), "2026-08-31T14:22:00", "one")),
+        )
+        good = os.path.join(self.vault, "good")
+        bad = os.path.join(self.vault, "bad")
+        out, err = self.run_cli("sync", "--repo", bad, "--repo", good, "--days", "3650")
+        self.assertIn("not a git repository", err)
+        self.assertIn("added 1 event(s) from 1 repo(s)", out)
+
+    def test_sync_with_no_readable_repo_exits_without_writing(self):
+        self.patch(tracker.shutil, "which", lambda _name: "git")
+        self.patch(tracker, "is_git_repo", lambda _path: False)
+        with contextlib.redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+            self.run_cli("sync", "--repo", self.repo)
+        self.assertFalse(os.path.exists(os.path.join(self.vault, "daily")))
+
+    def test_resolve_repos_falls_back_to_tracker_repos(self):
+        os.environ["TRACKER_REPOS"] = os.pathsep.join(["a", "b", ""])
+        self.addCleanup(os.environ.pop, "TRACKER_REPOS", None)
+        self.assertEqual(
+            tracker.resolve_repos(None, None),
+            [os.path.abspath("a"), os.path.abspath("b")],
+        )
+        # Explicit flags win over the environment, and duplicates collapse.
+        self.assertEqual(tracker.resolve_repos(["x", "x"], None), [os.path.abspath("x")])
+
+    def test_root_discovery_finds_git_subdirectories(self):
+        root = os.path.join(self.vault, "projects")
+        for name in ("one", "two", "not-a-repo"):
+            os.makedirs(os.path.join(root, name), exist_ok=True)
+        for name in ("one", "two"):
+            os.makedirs(os.path.join(root, name, ".git"), exist_ok=True)
+        found = [os.path.basename(p) for p in tracker.resolve_repos(None, [root])]
+        self.assertEqual(found, ["one", "two"])
+
+    def test_existing_ids_reads_only_the_log_section(self):
+        content = (
+            "## Log\n- [x] type:: commit | when:: 2026-08-31T09:00 | id:: abc | src:: sync\n"
+            "\n## Notes\n- [x] type:: commit | when:: 2026-08-31T10:00 | id:: elsewhere\n"
+        )
+        self.assertEqual(tracker.existing_ids(content), {"abc"})
+
+    def test_id_and_src_are_reserved_from_manual_extras(self):
+        with contextlib.redirect_stderr(StringIO()):
+            for bad in ("id=abc", "src=sync"):
+                with self.subTest(bad=bad), self.assertRaises(SystemExit):
+                    tracker.parse_extras([bad])
+
+    @unittest.skipUnless(shutil.which("git"), "git is not installed")
+    def test_real_repository_end_to_end(self):
+        repo = tempfile.mkdtemp(prefix="tracker-repo-")
+        self.addCleanup(shutil.rmtree, repo, True)
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+        def git(*argv):
+            subprocess.run(
+                ["git", "-C", repo] + list(argv), check=True, capture_output=True, env=env
+            )
+
+        git("init", "-q")
+        git("config", "user.email", "me@example.com")
+        git("config", "user.name", "Me")
+        tracker.write_text(os.path.join(repo, "f.txt"), "hi\n")
+        git("add", "f.txt")
+        git("commit", "-q", "-m", "first real commit")
+
+        out, _ = self.run_cli("sync", "--repo", repo, "--days", "3650")
+        self.assertIn("added 1 event(s)", out)
+        day = tracker.working_date().isoformat()
+        self.assertIn("first real commit", self.read_daily(day))
+        # And it is idempotent against a real repo too.
+        out, _ = self.run_cli("sync", "--repo", repo, "--days", "3650")
+        self.assertIn("added 0 event(s)", out)
+
+
+class TestReview(VaultTestCase):
+    """A review is written once. Regenerating it would erase what you wrote in it."""
+
+    WEEK = "2026-08-24"  # a Monday; the week before 2026-08-31
+
+    def seed(self, day, *lines):
+        body = "".join("- [x] %s\n" % ln for ln in lines)
+        self.write_daily(day, "# %s\n\n## Log\n%s" % (day, body))
+
+    def review_file(self):
+        return os.path.join(self.vault, "reviews", "2026-W35.md")
+
+    def test_default_week_is_the_one_that_just_ended(self):
+        self.assertEqual(
+            tracker.review_week_start(date(2026, 9, 2)), date(2026, 8, 24)
+        )
+        # --week takes any date inside the target week.
+        self.assertEqual(
+            tracker.review_week_start(date(2026, 9, 2), date(2026, 8, 27)),
+            date(2026, 8, 24),
+        )
+
+    def test_review_contains_the_weeks_numbers_and_the_prompts(self):
+        for day in ("2026-08-24", "2026-08-25", "2026-08-26"):
+            self.seed(day, "type:: leetcode | when:: %sT09:00 | diff:: medium" % day)
+        self.run_cli("review", "--week", self.WEEK)
+
+        body = tracker.read_text(self.review_file())
+        self.assertIn("# Review 2026-W35", body)
+        self.assertIn("2026-08-24 to 2026-08-30", body)
+        self.assertIn("Logged 3 of 7 days.", body)
+        self.assertIn("| 2026-08-24 | 3 | 3 | 3 |", body)  # week, days, events, leetcode
+        self.assertIn("## Leetcode difficulty mix", body)
+        for prompt in tracker.REVIEW_PROMPTS:
+            self.assertIn("## %s" % prompt, body)
+
+    def test_low_data_week_reads_as_insufficient_not_decline(self):
+        self.seed("2026-08-24", "type:: commit | when:: 2026-08-24T09:00")
+        self.run_cli("review", "--week", self.WEEK)
+        self.assertIn("insufficient data, not decline", tracker.read_text(self.review_file()))
+
+    def test_existing_review_is_never_overwritten(self):
+        self.seed("2026-08-24", "type:: commit | when:: 2026-08-24T09:00")
+        self.run_cli("review", "--week", self.WEEK)
+        mine = tracker.read_text(self.review_file()) + "\n- my own handwriting\n"
+        tracker.write_text(self.review_file(), mine)
+
+        out, _ = self.run_cli("review", "--week", self.WEEK)
+        self.assertIn("already exists", out)
+        self.assertEqual(tracker.read_text(self.review_file()), mine)
+
+    def test_print_writes_no_file(self):
+        self.seed("2026-08-24", "type:: commit | when:: 2026-08-24T09:00")
+        out, _ = self.run_cli("review", "--week", self.WEEK, "--print")
+        self.assertIn("# Review 2026-W35", out)
+        self.assertFalse(os.path.exists(self.review_file()))
+
+    def test_generated_text_is_ascii_so_print_survives_any_console(self):
+        # --print on a cp1252 console dies on any non-ASCII character the tool adds.
+        self.seed("2026-08-24", "type:: commit | when:: 2026-08-24T09:00")
+        out, _ = self.run_cli("review", "--week", self.WEEK, "--print")
+        out.encode("ascii")
+
+    def test_review_ignores_events_after_the_week(self):
+        self.seed("2026-08-24", "type:: commit | when:: 2026-08-24T09:00")
+        self.seed("2026-09-05", "type:: commit | when:: 2026-09-05T09:00")
+        self.run_cli("review", "--week", self.WEEK)
+        self.assertNotIn("2026-09-05", tracker.read_text(self.review_file()))
 
 
 if __name__ == "__main__":
