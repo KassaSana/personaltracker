@@ -38,6 +38,8 @@ t <type> [detail...] [--date YYYY-MM-DD] [--topic T] [--duration MIN] [--x K=V .
 t today [--date YYYY-MM-DD]
 t undo  [--date YYYY-MM-DD] [--yes]
 t stats [7|30] [--weeks N] [--pipeline] [--csv]
+t week   # = t stats 7
+t month  # = t stats 30
 t dash  [--weeks N]
 t sync   [--repo PATH ...] [--root DIR ...] [--days N] [--author EMAIL] [--dry-run]
 t review [--week YYYY-MM-DD] [--print]
@@ -61,6 +63,7 @@ t study --topic algo --duration 30
 
 ## Reading the numbers
 
+- `t week` / `t month` — the two windows you actually ask for, aliases of `t stats 7` / `t stats 30`.
 - `t stats 7` / `t stats 30` — counts by type, study minutes by topic, logging consistency (`logging: N of 30 days had an event`), and streaks.
 - `t stats --weeks 8` — weekly buckets per type with study minutes and a trend column comparing each week against the average of the four before it.
 - `t stats --pipeline` — application funnel by `stage::` (applied → oa → phone → onsite → offer) with conversion between stages.

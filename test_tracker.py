@@ -220,6 +220,16 @@ class TestImplicitTrack(VaultTestCase):
         self.assertIn("unknown command or type nonsense", err.getvalue())
         self.assertIn("leetcode", err.getvalue())
 
+    def test_week_and_month_are_stats_windows(self):
+        self.write_daily(
+            "2026-08-31", "## Log\n- [x] type:: commit | when:: 2026-08-31T09:00\n"
+        )
+        for name, days, _help in tracker.STATS_ALIASES:
+            with self.subTest(name=name):
+                out, _ = self.run_cli(name)
+                self.assertIn("events (%s days)" % days, out)
+                self.assertIn("streaks", out)
+
     def test_a_typo_gets_a_suggestion(self):
         for typo, wanted in (("leetcod", "leetcode"), ("stat", "stats"), ("revew", "review")):
             err = StringIO()

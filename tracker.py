@@ -29,7 +29,12 @@ VALID_TYPES = (
     "interview",
 )
 
-SUBCOMMANDS = ("track", "today", "undo", "stats", "dash", "sync", "review", "label")
+SUBCOMMANDS = (
+    "track", "today", "undo", "stats", "week", "month", "dash", "sync", "review", "label",
+)
+
+# `t week` is `t stats 7` under a name you actually reach for.
+STATS_ALIASES = (("week", "7", "Last 7 days"), ("month", "30", "Last 30 days"))
 
 # Fields the writer owns; --x may not collide with them. `id` and `src` belong to
 # sync: forging them by hand would break its dedupe and its audit trail.
@@ -1354,7 +1359,7 @@ def cmd_label(_args):
 CHEATSHEET = (
     ("log", "t <type> [detail...] [--x k=v]", "t leetcode two-sum --x diff=easy"),
     ("undo", "t undo", "remove the last line t wrote"),
-    ("read", "t stats 7 | t stats --weeks 8", "counts, streaks, trends"),
+    ("read", "t week | t month | t stats --weeks 8", "counts, streaks, trends"),
     ("notes", "t dash", "write Stats.md and Dashboard.md"),
     ("import", "t sync", "pull in git commits"),
     ("close", "t review", "last week's numbers plus three prompts"),
@@ -1418,6 +1423,12 @@ def build_parser():
     stats_p.add_argument("--pipeline", action="store_true", help="Application funnel by stage::")
     stats_p.add_argument("--csv", action="store_true", help="Dump all events as CSV to stdout")
     stats_p.set_defaults(func=cmd_stats)
+
+    for name, days, help_text in STATS_ALIASES:
+        alias_p = sub.add_parser(name, help="%s: same as t stats %s" % (help_text, days))
+        alias_p.set_defaults(
+            func=cmd_stats, days=days, weeks=None, pipeline=False, csv=False
+        )
 
     dash_p = sub.add_parser("dash", help="Write Stats.md and Dashboard.md into the vault")
     dash_p.add_argument(
