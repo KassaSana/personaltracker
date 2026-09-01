@@ -1281,17 +1281,12 @@ def cmd_complete(args):
         print(word)
 
 
-# Bare `t`: the six lines worth knowing, in the order you reach for them.
+# Bare `t`: the four actions worth remembering, in the order you reach for them.
 CHEATSHEET = (
-    ("log", "t <type> [detail...] [--x k=v]", "t leetcode two-sum --x diff=easy"),
-    ("window", "t gui", "same, without a terminal"),
-    ("undo", "t undo", "remove the last line t wrote"),
-    ("read", "t week | t month | t stats --weeks 8", "counts, streaks, trends"),
-    ("notes", "t dash", "write Stats.md and Dashboard.md"),
-    ("import", "t sync", "pull in git commits"),
-    ("measure", "t watch", "log focused time by category"),
-    ("propose", "t suggest", "leetcode and applications from history"),
-    ("close", "t review", "last week's numbers plus three prompts"),
+    ("recap", "t recap", "collect today's evidence"),
+    ("log", "t <type> [detail...]", "add what recap could not see"),
+    ("read", "t week", "see counts, time and streaks"),
+    ("review", "t review", "choose one change for next week"),
 )
 
 
@@ -1492,7 +1487,14 @@ def main(argv=None):
                 )
             )
     parser = build_parser()
-    args = parser.parse_args(argv)
+    if argv[0] == "track":
+        # argparse stops collecting `nargs="*"` after an option; keep plain words.
+        args, trailing = parser.parse_known_args(argv)
+        if any(word.startswith("-") for word in trailing):
+            parser.error("unrecognized arguments: %s" % " ".join(trailing))
+        args.detail.extend(trailing)
+    else:
+        args = parser.parse_args(argv)
     args.func(args)
 
 

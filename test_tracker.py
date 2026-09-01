@@ -405,7 +405,16 @@ class TestImplicitTrack(VaultTestCase):
         os.environ.pop("VAULT_PATH")
         out, _ = self.run_cli()
         self.assertIn("VAULT_PATH is not set", out)
-        self.assertIn("t dash", out)
+        self.assertIn("t recap", out)
+
+    def test_track_detail_may_follow_options(self):
+        self.run_cli(
+            "study", "--topic", "algorithms", "--duration", "25", "graph", "review"
+        )
+        body = self.read_daily(tracker.working_date().isoformat())
+        self.assertIn("detail:: graph review", body)
+        self.assertIn("topic:: algorithms", body)
+        self.assertIn("duration:: 25", body)
 
     def test_output_hardening_survives_any_stream(self):
         class Refuses:
@@ -957,6 +966,13 @@ class TestQuickAdd(VaultTestCase):
     def setUp(self):
         super().setUp()
         self.quickadd = __import__("quickadd")
+
+    def test_default_gui_surface_hides_generated_types(self):
+        self.assertTrue(self.quickadd.is_numbers_tab("Numbers"))
+        self.assertFalse(self.quickadd.is_numbers_tab("Log"))
+        for generated in ("commit", "merge", "assessment", "learning"):
+            self.assertNotIn(generated, self.quickadd.MANUAL_TYPES)
+        self.assertIn("leetcode", self.quickadd.MANUAL_TYPES)
 
     def test_logging_goes_through_the_normal_write_path(self):
         ok, _msg = self.quickadd.log_event("leetcode", "two-sum", "", "", "diff=easy")

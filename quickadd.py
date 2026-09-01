@@ -25,10 +25,17 @@ import suggest
 import tracker
 import watch
 
-WINDOW_TITLE = "log"
+WINDOW_TITLE = "Personal Tracker"
 TODAY_LINES = 8
 # Study is the only type with a topic and a duration; the fields follow the type.
 STUDY_ONLY = ("topic", "duration")
+TAB_NAMES = ("Recap", "Log", "Numbers")
+# Keep generated and rare types available in the CLI without making the quick-add
+# dropdown ask about them every time.
+MANUAL_TYPES = (
+    "leetcode", "study", "application", "assignment", "interview",
+    "design", "pull_request", "lecture", "slides", "resume",
+)
 
 # Numbers pane: enough weeks to see a trend, few enough to read at a glance.
 NUMBERS_WEEKS = 6
@@ -41,6 +48,10 @@ NUMBERS_TOPIC_DAYS = 30
 def split_extras(text):
     """'diff=easy result=solved' -> ['diff=easy', 'result=solved']."""
     return [word for word in (text or "").split() if word]
+
+
+def is_numbers_tab(name):
+    return name == "Numbers"
 
 
 def format_event(fields):
@@ -204,8 +215,8 @@ class QuickAdd(ttk.Frame):
 
         self.tabs = ttk.Notebook(self)
         self.tabs.grid(row=0, column=0, sticky="nsew")
-        tab_frames = [ttk.Frame(self.tabs, padding=8) for _ in range(3)]
-        for frame, label in zip(tab_frames, ("Recap", "Log", "Numbers")):
+        tab_frames = [ttk.Frame(self.tabs, padding=8) for _ in TAB_NAMES]
+        for frame, label in zip(tab_frames, TAB_NAMES):
             self.tabs.add(frame, text=label)
         self.tabs.bind("<<NotebookTabChanged>>", lambda _e: self.refresh_numbers())
 
@@ -230,15 +241,15 @@ class QuickAdd(ttk.Frame):
 
     def build_log_tab(self, parent):
         parent.columnconfigure(3, weight=1)
-        parent.rowconfigure(2, weight=1)
-        self.type_var = tk.StringVar(value=tracker.VALID_TYPES[0])
+        parent.rowconfigure(3, weight=1)
+        self.type_var = tk.StringVar(value=MANUAL_TYPES[0])
         self.fields = {}
 
         ttk.Label(parent, text="type").grid(row=0, column=0, sticky="w")
         combo = ttk.Combobox(
             parent,
             textvariable=self.type_var,
-            values=list(tracker.VALID_TYPES),
+            values=list(MANUAL_TYPES),
             state="readonly",
             width=14,
         )
@@ -248,17 +259,25 @@ class QuickAdd(ttk.Frame):
         ttk.Label(parent, text="detail").grid(row=0, column=2, sticky="w")
         self.fields["detail"] = self.entry(parent, row=0, column=3, columnspan=3)
 
-        for i, (name, width) in enumerate(
-            (("topic", 14), ("duration", 8), ("extras", 24))
-        ):
+        for i, (name, width) in enumerate((("topic", 14), ("duration", 8))):
             ttk.Label(parent, text=name).grid(row=1, column=i * 2, sticky="w", pady=(8, 0))
             self.fields[name] = self.entry(parent, row=1, column=i * 2 + 1, width=width)
 
+        self.advanced_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            parent, text="Advanced fields", variable=self.advanced_var,
+            command=self.toggle_advanced_fields,
+        ).grid(row=1, column=4, columnspan=2, sticky="e", pady=(8, 0))
+        self.extras_label = ttk.Label(parent, text="extra fields")
+        self.extras_label.grid(row=2, column=0, sticky="w", pady=(8, 0))
+        self.fields["extras"] = self.entry(parent, row=2, column=1, columnspan=5)
+        self.toggle_advanced_fields()
+
         self.today = tk.Listbox(parent, height=TODAY_LINES, activestyle="none")
-        self.today.grid(row=2, column=0, columnspan=6, sticky="nsew", pady=(10, 0))
+        self.today.grid(row=3, column=0, columnspan=6, sticky="nsew", pady=(10, 0))
 
         buttons = ttk.Frame(parent)
-        buttons.grid(row=3, column=0, columnspan=6, sticky="e", pady=(8, 0))
+        buttons.grid(row=4, column=0, columnspan=6, sticky="e", pady=(8, 0))
         ttk.Button(buttons, text="Undo last", command=self.on_undo).grid(row=0, column=0)
         ttk.Button(buttons, text="Log  (Enter)", command=self.on_log).grid(
             row=0, column=1, padx=(6, 0)
@@ -372,6 +391,11 @@ class QuickAdd(ttk.Frame):
                 widget.delete(0, "end")
             widget.configure(state=state)
 
+    def toggle_advanced_fields(self):
+        action = "grid" if self.advanced_var.get() else "grid_remove"
+        getattr(self.extras_label, action)()
+        getattr(self.fields["extras"], action)()
+
     def value(self, name):
         return self.fields[name].get().strip()
 
@@ -390,7 +414,7 @@ class QuickAdd(ttk.Frame):
             self.refresh_numbers()
 
     def showing_numbers(self):
-        return self.tabs.index(self.tabs.select()) == 1
+        return is_numbers_tab(str(self.tabs.tab(self.tabs.select(), "text")))
 
     def refresh_numbers(self):
         """Recompute on demand only: reading every note is too much work to do on
