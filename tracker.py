@@ -69,6 +69,10 @@ GENERATED_HEADER = (
 )
 GENERATED_NOTES = ("Stats.md", "Dashboard.md")
 
+# Seed for a daily note the tool has to create, relative to the vault. Optional:
+# without it the tool writes its own two-line skeleton.
+DAILY_TEMPLATE = os.path.join("templates", "Daily.md")
+
 LOG_HEADING_RE = re.compile(r"^## Log[ \t]*\r?$", re.MULTILINE)
 NEXT_H2_RE = re.compile(r"^## (?!#)", re.MULTILINE)
 COMPLETED_TASK_RE = re.compile(r"^- \[x\]\s+(.*)$")
@@ -244,6 +248,26 @@ def daily_path(vault, day):
     return os.path.join(vault, "daily", "%s.md" % day.isoformat())
 
 
+def new_daily_content(vault, day):
+    """Seed text for a daily note that does not exist yet.
+
+    A vault template wins if there is one, so a note created by the CLI looks like
+    one created by Obsidian. `{{date}}` is Obsidian's own placeholder, so the same
+    file serves both. An unreadable template is a warning, never a lost event.
+    """
+    path = os.path.join(vault, DAILY_TEMPLATE)
+    if os.path.isfile(path):
+        try:
+            body = read_text(path).replace("{{date}}", day.isoformat())
+        except OSError:
+            print("warning: could not read %s" % path, file=sys.stderr)
+        else:
+            if body and not body.endswith("\n"):
+                body += newline_of(body)
+            return body
+    return "# %s\n\n## Log\n" % day.isoformat()
+
+
 # ---- track / today / undo --------------------------------------------------
 
 
@@ -270,13 +294,11 @@ def cmd_track(args):
 
     path = daily_path(vault, day)
 
-    if not os.path.exists(path):
+    if os.path.exists(path):
+        content = read_text(path)
+    else:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        content = "# %s\n\n## Log\n%s\n" % (day.isoformat(), log_line)
-        write_text(path, content)
-        return
-
-    content = read_text(path)
+        content = new_daily_content(vault, day)
     write_text(path, insert_under_log(content, log_line))
 
 
@@ -1093,7 +1115,7 @@ def append_commit_lines(vault, by_day, dry_run):
 
         if content is None:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            content = "# %s\n\n## Log\n" % day.isoformat()
+            content = new_daily_content(vault, day)
         for line in fresh:
             content = insert_under_log(content, line)
         write_text(path, content)

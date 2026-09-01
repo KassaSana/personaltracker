@@ -61,6 +61,15 @@ t study --topic algo --duration 30
 
 `t undo` removes the last line **this tool** wrote in that day's note — the only permitted deletion. Hand-written lines are never touched, and it asks before writing unless you pass `--yes`.
 
+## Logging without a terminal
+
+Copy `templates/Daily.md` into your vault at `<VAULT_PATH>/templates/Daily.md`. Two things then change:
+
+- **New daily notes are seeded from it.** When `track` or `sync` has to create a note, it uses the template and substitutes `{{date}}` — Obsidian's own placeholder, so the same file works with Obsidian's Templates plugin. Without a template the tool writes its usual two-line skeleton.
+- **Ticking a box is logging.** The template's `## Log` section holds unticked lines like `- [ ] type:: leetcode | diff:: easy`. The parser only counts `- [x]`, so an unticked box is nothing and a ticked one is an event — no terminal, and it works from Obsidian mobile. Edit the boxes to match the week you actually have.
+
+A ticked box carries no `when::`, which is honest: the tool doesn't know the time, and the filename is what decides the day anyway. `t undo` never touches those lines — it only removes what the CLI itself wrote.
+
 ## Reading the numbers
 
 - `t week` / `t month` — the two windows you actually ask for, aliases of `t stats 7` / `t stats 30`.

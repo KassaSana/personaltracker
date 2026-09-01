@@ -100,6 +100,70 @@ class TestAppendOnly(VaultTestCase):
         self.assertFalse(os.path.exists(os.path.join(self.vault, "daily")))
 
 
+class TestDailyTemplate(VaultTestCase):
+    """A vault template seeds new notes; ticking one of its boxes is a real event."""
+
+    TEMPLATE = (
+        "# {{date}}\n\n## Log\n- [ ] type:: leetcode | diff:: easy\n\n## Notes\n\n"
+    )
+
+    def write_template(self, body=None):
+        path = os.path.join(self.vault, tracker.DAILY_TEMPLATE)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tracker.write_text(path, self.TEMPLATE if body is None else body)
+
+    def test_new_note_uses_the_template_and_fills_the_date(self):
+        self.write_template()
+        self.run_cli("track", "commit", "hello", "--date", "2026-08-31")
+        after = self.read_daily("2026-08-31")
+        self.assertTrue(after.startswith("# 2026-08-31\n"))
+        self.assertNotIn("{{date}}", after)
+        # The event lands under ## Log, after the template's own boxes, and the
+        # rest of the template survives.
+        lines = after.splitlines()
+        self.assertEqual(lines[3], "- [ ] type:: leetcode | diff:: easy")
+        self.assertIn("detail:: hello", lines[4])
+        self.assertIn("## Notes", after)
+
+    def test_unticked_boxes_are_not_events_and_ticked_ones_are(self):
+        self.write_template()
+        self.run_cli("track", "commit", "--date", "2026-08-31")
+        events, _ = tracker.load_events(self.vault)
+        self.assertEqual([f["type"] for f in events], ["commit"])
+
+        content = self.read_daily("2026-08-31").replace("- [ ] type:: leetcode", "- [x] type:: leetcode", 1)
+        tracker.write_text(self.daily("2026-08-31"), content)
+        events, _ = tracker.load_events(self.vault)
+        self.assertEqual(sorted(f["type"] for f in events), ["commit", "leetcode"])
+
+    def test_a_ticked_box_is_never_undone_by_accident(self):
+        # undo only removes lines this tool wrote; a box you ticked is yours.
+        self.write_template("# {{date}}\n\n## Log\n- [x] type:: leetcode | diff:: easy\n")
+        self.run_cli("track", "commit", "--date", "2026-08-31")
+        self.run_cli("undo", "--date", "2026-08-31", "--yes")
+        self.assertEqual(
+            self.read_daily("2026-08-31"),
+            "# 2026-08-31\n\n## Log\n- [x] type:: leetcode | diff:: easy\n",
+        )
+
+    def test_no_template_keeps_the_built_in_skeleton(self):
+        self.run_cli("track", "commit", "--date", "2026-08-31")
+        self.assertTrue(self.read_daily("2026-08-31").startswith("# 2026-08-31\n\n## Log\n- [x]"))
+
+    def test_shipped_template_is_usable_as_is(self):
+        repo_template = os.path.join(os.path.dirname(__file__), tracker.DAILY_TEMPLATE)
+        self.write_template(tracker.read_text(repo_template))
+        self.run_cli("track", "commit", "--date", "2026-08-31")
+        after = self.read_daily("2026-08-31")
+        self.assertNotIn("{{date}}", after)
+        # Every example box parses as the event it claims to be once ticked.
+        for raw in after.splitlines():
+            if not raw.startswith("- [ ] "):
+                continue
+            fields = tracker.parse_fields(raw[len("- [ ] "):])
+            self.assertIn(fields.get("type"), tracker.VALID_TYPES, raw)
+
+
 class TestRoundTrip(VaultTestCase):
     """Anything the writer emits, the reader must read back unchanged."""
 
