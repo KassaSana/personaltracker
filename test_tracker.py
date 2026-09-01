@@ -332,6 +332,63 @@ class TestNumbers(VaultTestCase):
                 self.run_cli(*argv)
 
 
+class TestBars(VaultTestCase):
+    """Bars are decoration over numbers that already exist; they must never lie."""
+
+    def seed(self, day, *lines):
+        body = "".join("- [x] %s\n" % ln for ln in lines)
+        self.write_daily(day, "# %s\n\n## Log\n%s" % (day, body))
+
+    def test_bar_is_proportional_and_never_hides_a_nonzero_value(self):
+        self.assertEqual(tracker.bar(10, 10, 10), "#" * 10)
+        self.assertEqual(tracker.bar(5, 10, 10), "#" * 5)
+        # One event in a hundred-event window is still one event, not nothing.
+        self.assertEqual(tracker.bar(1, 100, 10), "#")
+        self.assertEqual(tracker.bar(0, 10, 10), "")
+        self.assertEqual(tracker.bar(3, 0, 10), "")
+
+    def test_bar_column_scales_to_the_column_peak(self):
+        headers, rows = tracker.bar_column(
+            ["week", "events"], [["a", "4"], ["b", "2"], ["c", "0"]], 1
+        )
+        self.assertEqual(headers, ["week", "events", "chart"])
+        self.assertEqual(len(rows[0][2]), tracker.BAR_WIDTH)
+        self.assertEqual(len(rows[1][2]), tracker.BAR_WIDTH // 2)
+        self.assertEqual(rows[2][2], "")
+
+    def test_bar_column_survives_a_non_numeric_cell(self):
+        _headers, rows = tracker.bar_column(["week", "events"], [["a", "n/a"]], 1)
+        self.assertEqual(rows[0][2], "")
+
+    def test_study_topic_report_is_sorted_largest_first(self):
+        self.seed(
+            "2026-08-31",
+            "type:: study | when:: 2026-08-31T09:00 | topic:: algo | duration:: 30",
+            "type:: study | when:: 2026-08-31T10:00 | topic:: os | duration:: 90",
+            "type:: study | when:: 2026-08-31T11:00 | topic:: algo | duration:: 30",
+        )
+        events, _ = tracker.load_events(self.vault)
+        headers, rows = tracker.study_topic_report(events)
+        self.assertEqual(headers, ["topic", "minutes", "chart"])
+        self.assertEqual([r[:2] for r in rows], [["os", "90"], ["algo", "60"]])
+        self.assertEqual(len(rows[0][2]), tracker.BAR_WIDTH)
+        self.assertIsNone(tracker.study_topic_report([]))
+
+    def test_dashboard_carries_bars_and_stays_ascii(self):
+        self.seed(
+            "2026-08-31",
+            "type:: commit | when:: 2026-08-31T09:00",
+            "type:: study | when:: 2026-08-31T10:00 | topic:: algo | duration:: 45",
+        )
+        events, _ = tracker.load_events(self.vault)
+        buckets = tracker.weekly_buckets(events, 4, date(2026, 8, 31))
+        body = tracker.dashboard_markdown(events, buckets, date(2026, 8, 31))
+        body.encode("ascii")
+        self.assertIn("| chart |", body)
+        self.assertIn(tracker.BAR_CHAR * tracker.BAR_WIDTH, body)
+        self.assertIn("| algo | 45 |", body)
+
+
 def git_log_output(*records):
     """Fake `git log --pretty=format:GIT_LOG_FORMAT` output."""
     return "\n".join(tracker.GIT_FIELD_SEP.join(r) for r in records)
