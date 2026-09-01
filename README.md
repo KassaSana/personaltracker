@@ -31,6 +31,8 @@ Then `t commit "fixed onnx flag"` works from any directory. A bare event type im
 
 ## Commands
 
+A bare `t` prints today's log followed by a six-line cheatsheet — the answer to both "did I log that already?" and "what was the flag again?".
+
 ```
 t <type> [detail...] [--date YYYY-MM-DD] [--topic T] [--duration MIN] [--x K=V ...]
 t today [--date YYYY-MM-DD]

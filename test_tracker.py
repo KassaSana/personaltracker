@@ -220,6 +220,24 @@ class TestImplicitTrack(VaultTestCase):
         self.assertIn("unknown command or type nonsense", err.getvalue())
         self.assertIn("leetcode", err.getvalue())
 
+    def test_bare_invocation_shows_today_and_the_cheatsheet(self):
+        self.write_daily(
+            tracker.working_date().isoformat(),
+            "## Log\n- [x] type:: commit | when:: 2026-08-31T09:00 | detail:: hello\n",
+        )
+        out, _ = self.run_cli()
+        self.assertIn("detail:: hello", out)
+        for label, _usage, _note in tracker.CHEATSHEET:
+            self.assertIn(label, out)
+        self.assertIn("leetcode", out)
+        out.encode("ascii")
+
+    def test_bare_invocation_without_a_vault_still_helps(self):
+        os.environ.pop("VAULT_PATH")
+        out, _ = self.run_cli()
+        self.assertIn("VAULT_PATH is not set", out)
+        self.assertIn("t dash", out)
+
     def test_parser_exposes_every_subcommand(self):
         parser = tracker.build_parser()
         for name in tracker.SUBCOMMANDS:

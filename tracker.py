@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 
@@ -1339,6 +1340,40 @@ def cmd_label(_args):
 # ---- CLI -------------------------------------------------------------------
 
 
+# Bare `t`: the six lines worth knowing, in the order you reach for them.
+CHEATSHEET = (
+    ("log", "t <type> [detail...] [--x k=v]", "t leetcode two-sum --x diff=easy"),
+    ("undo", "t undo", "remove the last line t wrote"),
+    ("read", "t stats 7 | t stats --weeks 8", "counts, streaks, trends"),
+    ("notes", "t dash", "write Stats.md and Dashboard.md"),
+    ("import", "t sync", "pull in git commits"),
+    ("close", "t review", "last week's numbers plus three prompts"),
+)
+
+
+def print_cheatsheet():
+    width = max(len(label) for label, _, _ in CHEATSHEET)
+    for label, usage, note in CHEATSHEET:
+        print("  %s  %-31s %s" % (label.ljust(width), usage, note))
+    print("")
+    print(textwrap.fill(
+        "types: " + ", ".join(VALID_TYPES), width=78, subsequent_indent="       "
+    ))
+    print("`t --help` for every flag.")
+
+
+def cmd_overview():
+    """Bare `t`: what today looks like, then how to add to it."""
+    raw = os.environ.get("VAULT_PATH")
+    if raw and os.path.isdir(raw):
+        cmd_today(argparse.Namespace(date=None))
+    else:
+        # Never fatal: the cheatsheet is exactly what someone with no vault needs.
+        print("VAULT_PATH is not set to an existing directory; nothing to show yet.")
+    print("")
+    print_cheatsheet()
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="tracker.py")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1412,7 +1447,12 @@ def build_parser():
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and not argv[0].startswith("-"):
+    if not argv:
+        # A bare `t` should teach, not scold: argparse's "required" usage blob helps
+        # nobody, and "what did I log today" is the thing you actually wanted.
+        cmd_overview()
+        return
+    if not argv[0].startswith("-"):
         # `t commit "msg"` means `track commit "msg"`; subcommand names still win.
         if argv[0] in VALID_TYPES:
             argv.insert(0, "track")
