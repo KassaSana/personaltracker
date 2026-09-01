@@ -6,9 +6,9 @@ import csv
 import difflib
 import os
 import re
-import shutil
-import subprocess
+import stat
 import sys
+import tempfile
 import textwrap
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
@@ -37,10 +37,7 @@ SUBCOMMANDS = (
     "label", "suggest", "recap", "gui", "setup", "watch", "complete",
 )
 
-# `time` lines are written by `t watch` only: measured attention, not completion.
-# They feed watch.py's time tables and are excluded from every count, streak and
-# trend -- a decline in the chart must mean a decline in you, and hours are not
-# output.
+# `time` lines are written by `t watch` and reported separately from completed work.
 TIME_TYPE = "time"
 
 # `t week` is `t stats 7` under a name you actually reach for.
@@ -156,8 +153,39 @@ def read_text(path):
 
 
 def write_text(path, content):
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        f.write(content)
+    """Atomically replace a text file, so interruption cannot leave it truncated."""
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    try:
+        existing_mode = stat.S_IMODE(os.stat(path).st_mode)
+    except OSError:
+        existing_mode = None
+    fd, temporary = tempfile.mkstemp(prefix=".%s." % os.path.basename(path), dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        if existing_mode is not None:
+            os.chmod(temporary, existing_mode)
+        os.replace(temporary, path)
+        temporary = None
+        if os.name != "nt":
+            # Persist the directory entry as well as the file contents on POSIX.
+            try:
+                directory_fd = os.open(directory, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            except OSError:
+                pass
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
 
 
 def locked_note(path):
