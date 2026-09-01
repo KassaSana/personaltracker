@@ -14,11 +14,25 @@ import os
 import queue
 import sys
 import threading
-import tkinter as tk
-from tkinter import font as tkfont
-from tkinter import messagebox, ttk
 from argparse import Namespace
 from datetime import datetime, timedelta
+
+try:
+    import tkinter as tk
+    from tkinter import font as tkfont
+    from tkinter import messagebox, ttk
+except ImportError as exc:
+    # Keep the pure helpers importable on minimal/headless Python installs.  Only
+    # `t gui` needs Tk; stats, parsing, and their tests do not.
+    tk = tkfont = messagebox = None
+
+    class _MissingTtk:
+        Frame = object
+
+    ttk = _MissingTtk()
+    TK_IMPORT_ERROR = exc
+else:
+    TK_IMPORT_ERROR = None
 
 import recap
 import suggest
@@ -552,6 +566,10 @@ class QuickAdd(ttk.Frame):
 
 
 def main():
+    if TK_IMPORT_ERROR is not None:
+        tracker.die(
+            "Tkinter is not installed; install the optional Tk support for your Python to use `t gui`."
+        )
     try:
         vault = tracker.vault_path()
     except SystemExit:

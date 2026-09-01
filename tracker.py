@@ -50,14 +50,8 @@ RESERVED_FIELDS = ("type", "when", "detail", "topic", "duration", "id", "src")
 # Job-application funnel, in order. Conversion is measured between neighbours.
 PIPELINE_STAGES = ("applied", "oa", "phone", "onsite", "offer")
 
-# A week with fewer logged days than this is reported as insufficient data,
-# never as a decline.
+# Below this coverage level, a weekly comparison is labeled low-data.
 MIN_LOGGED_DAYS = 3
-
-# sync: one record per line, fields split by a byte no commit subject can contain.
-GIT_FIELD_SEP = "\x1f"
-GIT_LOG_FORMAT = GIT_FIELD_SEP.join(("%H", "%aI", "%s", "%P"))
-SHORT_SHA_LEN = 8
 
 # Bars in the generated notes. Fixed width so one big week cannot stretch the table,
 # and ASCII so the file stays readable in any editor, console or codepage.
@@ -1019,127 +1013,8 @@ def cmd_dash(args):
     write_generated_notes(vault_path(), args.weeks)
 
 
-# ---- sync ------------------------------------------------------------------
-#
-# Batch import of commits from local git. Not the write path in spirit: a failure just
-# means "run it again later". The dedupe key `id::` lives in the Markdown like everything
-# else, so re-running is always safe and there is no state file to drift.
-
-
-def run_git(repo, argv):
-    """Run a git command in repo. Returns stdout, or None on any failure."""
-    exe = shutil.which("git")
-    if not exe:
-        return None
-    try:
-        proc = subprocess.run(
-            [exe, "-C", repo] + argv,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except OSError:
-        return None
-    if proc.returncode != 0:
-        return None
-    return proc.stdout
-
-
-def git_author_email(repo):
-    """The repo's configured user.email — whose commits count as yours."""
-    out = run_git(repo, ["config", "user.email"])
-    return out.strip() if out else ""
-
-
-def parse_git_date(text):
-    """`%aI` is strict ISO 8601 with an offset; return it as local wall-clock time."""
-    try:
-        when = datetime.fromisoformat(text.strip())
-    except ValueError:
-        return None
-    if when.tzinfo is not None:
-        when = when.astimezone().replace(tzinfo=None)
-    return when
-
-
-def parse_git_log(text):
-    """Parse GIT_LOG_FORMAT records into [{sha, when, subject, parents}].
-
-    Tolerant like every other reader here: a record missing fields or carrying an
-    unreadable date is skipped, never fatal.
-    """
-    commits = []
-    for raw in (text or "").splitlines():
-        parts = raw.rstrip("\r").split(GIT_FIELD_SEP)
-        if len(parts) not in (3, 4):
-            continue
-        sha, when_raw, subject = parts[:3]
-        parents = parts[3].split() if len(parts) == 4 else []
-        when = parse_git_date(when_raw)
-        if not sha.strip() or when is None:
-            continue
-        commits.append({
-            "sha": sha.strip(), "when": when, "subject": sanitize(subject),
-            "parents": parents,
-        })
-    return commits
-
-
-def git_commits(repo, since, author):
-    """Commits by `author` since `since`, or None if the repo could not be read."""
-    argv = [
-        "log",
-        "--since",
-        since.isoformat(),
-        "--pretty=format:" + GIT_LOG_FORMAT,
-    ]
-    if author:
-        argv += ["--author", author]
-    out = run_git(repo, argv)
-    return None if out is None else parse_git_log(out)
-
-
-def is_git_repo(path):
-    return os.path.isdir(os.path.join(path, ".git"))
-
-
-def discover_repos(root):
-    """A --root directory plus its immediate subdirectories, keeping the git ones."""
-    found = [root] if is_git_repo(root) else []
-    try:
-        names = sorted(os.listdir(root))
-    except OSError:
-        print("warning: cannot read --root %s" % root, file=sys.stderr)
-        return found
-    for name in names:
-        path = os.path.join(root, name)
-        if is_git_repo(path):
-            found.append(path)
-    return found
-
-
-def resolve_repos(repos, roots):
-    """Explicit flags win; TRACKER_REPOS is the zero-typing default."""
-    paths = list(repos or ())
-    for root in roots or ():
-        paths += discover_repos(root)
-    if not paths:
-        raw = os.environ.get("TRACKER_REPOS", "")
-        paths = [p for p in raw.split(os.pathsep) if p.strip()]
-
-    # A repo reachable two ways must still be imported once.
-    resolved, seen = [], set()
-    for path in paths:
-        full = os.path.abspath(os.path.expanduser(path.strip()))
-        if full not in seen:
-            seen.add(full)
-            resolved.append(full)
-    return resolved
-
-
 def existing_ids(content):
-    """The id:: values a note already carries — sync's dedupe key."""
+    """Return durable dedupe IDs from completed tasks in the Log section."""
     ids = set()
     for raw in log_section(content).splitlines():
         m = COMPLETED_TASK_RE.match(raw.rstrip("\r"))
@@ -1149,37 +1024,6 @@ def existing_ids(content):
         if value:
             ids.add(value)
     return ids
-
-
-def collect_commit_lines(repos, since, author):
-    """Map working date -> [(when, id, log line)] for every commit worth appending."""
-    by_day = defaultdict(list)
-    scanned = 0
-    for repo in repos:
-        if not is_git_repo(repo):
-            print("warning: not a git repository: %s" % repo, file=sys.stderr)
-            continue
-        who = author or git_author_email(repo)
-        if not who:
-            print(
-                "warning: %s has no git user.email; pass --author" % repo, file=sys.stderr
-            )
-            continue
-        commits = git_commits(repo, since, who)
-        if commits is None:
-            print("warning: could not read git log in %s" % repo, file=sys.stderr)
-            continue
-        scanned += 1
-        name = sanitize(os.path.basename(repo)) or "repo"
-        for commit in commits:
-            short = commit["sha"][:SHORT_SHA_LEN]
-            extras = [("repo", name), ("id", short), ("src", "sync")]
-            event_type = "merge" if len(commit.get("parents", ())) >= 2 else "commit"
-            line = format_log_line(
-                event_type, commit["when"], commit["subject"], None, None, extras
-            )
-            by_day[working_date(commit["when"])].append((commit["when"], short, line))
-    return by_day, scanned
 
 
 def append_commit_lines(vault, by_day, dry_run):
@@ -1213,35 +1057,6 @@ def append_commit_lines(vault, by_day, dry_run):
     return added, skipped
 
 
-def cmd_sync(args):
-    if args.days < 1:
-        die("--days must be at least 1")
-    if not shutil.which("git"):
-        die("git is not installed or not on PATH.")
-
-    vault = vault_path()
-    repos = resolve_repos(args.repo, args.root)
-    if not repos:
-        die("no repositories to sync; pass --repo/--root or set TRACKER_REPOS.")
-
-    since = working_date() - timedelta(days=args.days)
-    by_day, scanned = collect_commit_lines(repos, since, args.author)
-    if not scanned:
-        die("no repository could be read; nothing was written.")
-
-    added, skipped = append_commit_lines(vault, by_day, args.dry_run)
-    verb = "would add" if args.dry_run else "added"
-    print(
-        "%s %d event(s) from %d repo(s); %d already logged" % (verb, added, scanned, skipped)
-    )
-
-    # Sync is the one command that changes the numbers without you typing them, so
-    # it is also the one that most easily leaves Dashboard.md lying. Refresh it,
-    # but only when something actually landed.
-    if added and not args.dry_run and not args.no_dash:
-        write_generated_notes(vault)
-
-
 # ---- CLI -------------------------------------------------------------------
 
 
@@ -1255,6 +1070,11 @@ def sibling_module(name):
         return __import__(name)
     except ImportError as exc:
         die("could not load %s.py: %s" % (name, exc))
+
+
+def cmd_sync(args):
+    """Import local Git commits. Git-specific code lives in sync.py."""
+    sibling_module("sync").cmd_sync(args)
 
 
 def cmd_gui(_args):

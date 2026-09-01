@@ -6,9 +6,10 @@ import os
 import shutil
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import suggest
+import sync as git_sync
 import tracker
 import watch
 
@@ -21,10 +22,10 @@ def sync_day(vault, day, dry_run=False):
     """Import local Git facts for one working day; absence is non-fatal to recap."""
     if not shutil.which("git"):
         return 0, 0, "git is not installed; exact Git import skipped"
-    repos = tracker.resolve_repos(None, None)
+    repos = git_sync.resolve_repos(None, None)
     if not repos:
         return 0, 0, "TRACKER_REPOS is empty; exact Git import skipped"
-    by_day, scanned = tracker.collect_commit_lines(repos, day, None)
+    by_day, scanned = git_sync.collect_commit_lines(repos, day, None)
     selected = {day: by_day.get(day, [])} if by_day.get(day) else {}
     if not scanned:
         return 0, 0, "no configured Git repository could be read"

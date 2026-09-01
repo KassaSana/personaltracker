@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import types
 import unittest
 from argparse import Namespace
 from datetime import date, datetime, timedelta, timezone
@@ -19,6 +20,7 @@ import locking
 import recap
 import review
 import suggest
+import sync as git_sync
 import tracker
 import watch
 
@@ -89,6 +91,17 @@ class TestAppendOnly(VaultTestCase):
         self.assertTrue(after.endswith("\r\n"))
         # Every newline in the file is still a CRLF pair.
         self.assertEqual(after.count("\n"), after.count("\r\n"))
+
+    def test_write_text_replaces_atomically_and_leaves_no_temp_file(self):
+        path = self.daily("2026-08-31")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tracker.write_text(path, "before\n")
+        tracker.write_text(path, "after\n")
+        self.assertEqual(tracker.read_text(path), "after\n")
+        self.assertEqual(
+            [name for name in os.listdir(os.path.dirname(path)) if name.startswith(".2026-08-31.md.")],
+            [],
+        )
 
     def test_missing_log_heading_appends_section(self):
         self.write_daily("2026-08-31", "# 2026-08-31\n\nprose only\n")
@@ -670,7 +683,7 @@ class TestBars(VaultTestCase):
 
 def git_log_output(*records):
     """Fake `git log --pretty=format:GIT_LOG_FORMAT` output."""
-    return "\n".join(tracker.GIT_FIELD_SEP.join(r) for r in records)
+    return "\n".join(git_sync.GIT_FIELD_SEP.join(r) for r in records)
 
 
 class TestSync(VaultTestCase):
@@ -687,9 +700,9 @@ class TestSync(VaultTestCase):
                 return email + "\n"
             return log_text
 
-        self.patch(tracker, "run_git", run_git)
-        self.patch(tracker, "is_git_repo", lambda _path: True)
-        self.patch(tracker.shutil, "which", lambda _name: "git")
+        self.patch(git_sync, "run_git", run_git)
+        self.patch(git_sync, "is_git_repo", lambda _path: True)
+        self.patch(git_sync.shutil, "which", lambda _name: "git")
 
     def patch(self, obj, name, value):
         old = getattr(obj, name)
@@ -705,14 +718,14 @@ class TestSync(VaultTestCase):
             ("b" * 40, "not a date", "bad date"),
         )
         text += "\n\nonly-one-field\n"
-        commits = tracker.parse_git_log(text)
+        commits = git_sync.parse_git_log(text)
         self.assertEqual([c["subject"] for c in commits], ["real subject"])
         self.assertEqual(commits[0]["sha"], "a" * 40)
 
     def test_parse_git_log_converts_offsets_to_local_time(self):
         # 09:00 UTC is a fixed instant; whatever local zone the test runs in, the
         # naive result must equal that instant rendered locally.
-        commits = tracker.parse_git_log(
+        commits = git_sync.parse_git_log(
             git_log_output(("a" * 40, "2026-08-31T09:00:00+00:00", "s"))
         )
         expected = datetime(2026, 8, 31, 9, 0, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
@@ -725,7 +738,7 @@ class TestSync(VaultTestCase):
         fields = tracker.parse_fields(tracker.COMPLETED_TASK_RE.match(line).group(1))
         self.assertEqual(fields["type"], "commit")
         self.assertEqual(fields["detail"], "fixed onnx flag")
-        self.assertEqual(fields["id"], "a" * 8)
+        self.assertEqual(fields["id"], os.path.realpath(self.repo) + ":" + "a" * 40)
         self.assertEqual(fields["src"], "sync")
         self.assertEqual(fields["repo"], "repo")
 
@@ -757,6 +770,21 @@ class TestSync(VaultTestCase):
         self.assertIn("added 0 event(s)", out)
         self.assertIn("2 already logged", out)
 
+    def test_sync_ids_are_unique_across_repositories(self):
+        sha = "a" * 40
+        self.patch(git_sync, "is_git_repo", lambda _path: True)
+        self.patch(git_sync, "git_author_email", lambda _path: "me@example.com")
+        self.patch(git_sync, "git_commits", lambda _repo, _since, _author: git_sync.parse_git_log(
+            git_log_output((sha, "2026-08-31T14:22:00", "same commit"))
+        ))
+        one, two = os.path.join(self.vault, "one"), os.path.join(self.vault, "two")
+        self.sync = lambda *argv: self.run_cli("sync", "--repo", one, "--repo", two, *argv)
+        self.sync("--days", "3650")
+        lines = [ln for ln in self.read_daily("2026-08-31").splitlines() if "src:: sync" in ln]
+        self.assertEqual(len(lines), 2)
+        self.assertIn("id:: " + os.path.realpath(one) + ":" + sha, lines[0])
+        self.assertIn("id:: " + os.path.realpath(two) + ":" + sha, lines[1])
+
     def test_sync_is_append_only_around_existing_content(self):
         original = (
             "# 2026-08-31\n\nprose\n\n## Log\n"
@@ -768,7 +796,7 @@ class TestSync(VaultTestCase):
         self.sync("--days", "3650")
 
         after = self.read_daily("2026-08-31")
-        added = [ln for ln in after.splitlines() if "id:: aaaaaaaa" in ln]
+        added = [ln for ln in after.splitlines() if "id:: " + os.path.realpath(self.repo) + ":" + "a" * 40 in ln]
         self.assertEqual(len(added), 1)
         self.assertEqual(after.replace(added[0] + "\n", "", 1), original)
 
@@ -811,10 +839,10 @@ class TestSync(VaultTestCase):
         self.assertFalse(os.path.exists(os.path.join(self.vault, "Dashboard.md")))
 
     def test_unreadable_repo_warns_and_is_not_fatal(self):
-        self.patch(tracker.shutil, "which", lambda _name: "git")
-        self.patch(tracker, "is_git_repo", lambda path: path.endswith("good"))
+        self.patch(git_sync.shutil, "which", lambda _name: "git")
+        self.patch(git_sync, "is_git_repo", lambda path: path.endswith("good"))
         self.patch(
-            tracker,
+            git_sync,
             "run_git",
             lambda _repo, argv: "me@example.com\n" if argv[:1] == ["config"]
             else git_log_output((("a" * 40), "2026-08-31T14:22:00", "one")),
@@ -826,8 +854,8 @@ class TestSync(VaultTestCase):
         self.assertIn("added 1 event(s) from 1 repo(s)", out)
 
     def test_sync_with_no_readable_repo_exits_without_writing(self):
-        self.patch(tracker.shutil, "which", lambda _name: "git")
-        self.patch(tracker, "is_git_repo", lambda _path: False)
+        self.patch(git_sync.shutil, "which", lambda _name: "git")
+        self.patch(git_sync, "is_git_repo", lambda _path: False)
         with contextlib.redirect_stderr(StringIO()), self.assertRaises(SystemExit):
             self.run_cli("sync", "--repo", self.repo)
         self.assertFalse(os.path.exists(os.path.join(self.vault, "daily")))
@@ -836,11 +864,11 @@ class TestSync(VaultTestCase):
         os.environ["TRACKER_REPOS"] = os.pathsep.join(["a", "b", ""])
         self.addCleanup(os.environ.pop, "TRACKER_REPOS", None)
         self.assertEqual(
-            tracker.resolve_repos(None, None),
+            git_sync.resolve_repos(None, None),
             [os.path.abspath("a"), os.path.abspath("b")],
         )
         # Explicit flags win over the environment, and duplicates collapse.
-        self.assertEqual(tracker.resolve_repos(["x", "x"], None), [os.path.abspath("x")])
+        self.assertEqual(git_sync.resolve_repos(["x", "x"], None), [os.path.abspath("x")])
 
     def test_root_discovery_finds_git_subdirectories(self):
         root = os.path.join(self.vault, "projects")
@@ -848,7 +876,7 @@ class TestSync(VaultTestCase):
             os.makedirs(os.path.join(root, name), exist_ok=True)
         for name in ("one", "two"):
             os.makedirs(os.path.join(root, name, ".git"), exist_ok=True)
-        found = [os.path.basename(p) for p in tracker.resolve_repos(None, [root])]
+        found = [os.path.basename(p) for p in git_sync.resolve_repos(None, [root])]
         self.assertEqual(found, ["one", "two"])
 
     def test_existing_ids_reads_only_the_log_section(self):
@@ -974,6 +1002,15 @@ class TestQuickAdd(VaultTestCase):
             self.assertNotIn(generated, self.quickadd.MANUAL_TYPES)
         self.assertIn("leetcode", self.quickadd.MANUAL_TYPES)
 
+    def test_missing_tk_only_disables_the_optional_window(self):
+        original = self.quickadd.TK_IMPORT_ERROR
+        self.quickadd.TK_IMPORT_ERROR = ImportError("no tkinter")
+        self.addCleanup(setattr, self.quickadd, "TK_IMPORT_ERROR", original)
+        err = StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            self.quickadd.main()
+        self.assertIn("Tkinter is not installed", err.getvalue())
+
     def test_logging_goes_through_the_normal_write_path(self):
         ok, _msg = self.quickadd.log_event("leetcode", "two-sum", "", "", "diff=easy")
         self.assertTrue(ok)
@@ -1081,8 +1118,8 @@ class TestQuickAdd(VaultTestCase):
         history = os.path.join(self.vault, "History")
         conn = sqlite3.connect(history)
         when = datetime.now() - timedelta(hours=1)
-        offset = datetime.now() - datetime.utcnow()
-        stamp = int(((when - offset) - __import__("suggest").CHROMIUM_EPOCH).total_seconds() * 1e6)
+        utc = when.astimezone(timezone.utc).replace(tzinfo=None)
+        stamp = int((utc - __import__("suggest").CHROMIUM_EPOCH).total_seconds() * 1e6)
         with conn:
             conn.execute("CREATE TABLE urls (id INTEGER PRIMARY KEY, url TEXT, title TEXT)")
             conn.execute("CREATE TABLE visits (id INTEGER PRIMARY KEY, url INTEGER, visit_time INTEGER)")
@@ -1202,7 +1239,7 @@ class TestSetup(VaultTestCase):
         guess = self.bootstrap.guess_repos()
         self.assertTrue(guess)
         for path in guess.split(os.pathsep):
-            self.assertTrue(tracker.is_git_repo(path), path)
+            self.assertTrue(git_sync.is_git_repo(path), path)
 
     def test_no_path_and_no_vault_path_is_a_clear_error(self):
         os.environ.pop("VAULT_PATH")
@@ -1301,7 +1338,7 @@ class TestSuggest(VaultTestCase):
 
     def as_utc(self, when):
         """Browsers store UTC; the tests speak local time, same as the tool."""
-        return when - (datetime.now() - datetime.utcnow())
+        return when.astimezone(timezone.utc).replace(tzinfo=None)
 
     def gather(self, days=3):
         since = datetime.now() - timedelta(days=days)
@@ -1616,6 +1653,37 @@ class TestWatch(VaultTestCase):
 
     def minute(self, m):
         return datetime(2026, 8, 31, 10, 0) + timedelta(minutes=m)
+
+    def test_windows_api_signatures_are_pointer_safe(self):
+        class Fn:
+            def __init__(self):
+                self.argtypes = None
+                self.restype = None
+
+        kernel32 = types.SimpleNamespace(**{
+            name: Fn() for name in (
+                "CreateMutexW", "CloseHandle", "OpenProcess",
+                "QueryFullProcessImageNameW", "GetTickCount",
+            )
+        })
+        user32 = types.SimpleNamespace(**{
+            name: Fn() for name in (
+                "GetForegroundWindow", "GetWindowTextLengthW", "GetWindowTextW",
+                "GetWindowThreadProcessId", "GetLastInputInfo",
+            )
+        })
+        fake = types.SimpleNamespace(
+            windll=types.SimpleNamespace(kernel32=kernel32, user32=user32),
+            c_void_p=__import__("ctypes").c_void_p,
+            POINTER=__import__("ctypes").POINTER,
+            c_int=__import__("ctypes").c_int,
+        )
+        import ctypes.wintypes as wt
+        watch._configure_winapi(fake, wt)
+        self.assertIs(kernel32.CreateMutexW.restype, wt.HANDLE)
+        self.assertIs(kernel32.OpenProcess.restype, wt.HANDLE)
+        self.assertIs(user32.GetForegroundWindow.restype, wt.HWND)
+        self.assertEqual(kernel32.CloseHandle.argtypes, (wt.HANDLE,))
 
     def feed_run(self, sessions, spec):
         """spec: (start_minute, end_minute, category) sampled every 30 seconds."""

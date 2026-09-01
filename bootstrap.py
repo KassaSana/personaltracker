@@ -15,6 +15,7 @@ import subprocess
 import sys
 
 import tracker
+import sync as git_sync
 
 VAULT_DIRS = ("daily", "reviews", "templates")
 
@@ -157,7 +158,7 @@ def guess_repos():
     each entry as a repo and warns about anything that is not one. So discover the
     real ones next to this project, and fall back to this project alone.
     """
-    found = tracker.discover_repos(os.path.dirname(repo_dir()))
+    found = git_sync.discover_repos(os.path.dirname(repo_dir()))
     return os.pathsep.join(found or [repo_dir()])
 
 

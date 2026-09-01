@@ -18,7 +18,7 @@ import sqlite3
 import sys
 import tempfile
 from collections import OrderedDict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import tracker
 
@@ -302,8 +302,9 @@ def visit_time(kind, stamp):
     try:
         # Both browsers store UTC; the rest of the tool works in local wall-clock.
         utc = epoch + timedelta(microseconds=micros)
-        offset = datetime.now() - datetime.utcnow()
-        return utc + offset
+        # Convert at the visit's timestamp, not with today's UTC offset: daylight
+        # saving rules may differ between the visit date and today.
+        return utc.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
     except (OverflowError, OSError, ValueError):
         return None
 
