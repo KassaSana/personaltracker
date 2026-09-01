@@ -270,10 +270,10 @@ def cmd_setup(args):
 
     print("")
     print("Then, in a new terminal:")
-    print("  t commit \"first thing I did\"     log something by hand")
-    print("  t sync --dry-run                 see the commits it would import")
-    print("  t suggest --dry-run              see what your history suggests")
-    print("  t gui                            the window, if a terminal is the problem")
-    print("  t watch                          measure focused time by category")
-    print("  t setup --watch-task             ...and have it start at every login")
+    print("  t recap                         collect today's evidence")
+    print("  t leetcode two-sum              log what recap could not see")
+    print("  t week                          see counts, time and streaks")
+    print("  t review                        choose one change for next week")
+    print("")
+    print("Run `t --help` for setup, automation and advanced commands.")
     return 0
