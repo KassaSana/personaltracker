@@ -295,10 +295,39 @@ def _win():
     return ctypes, ctypes.wintypes
 
 
+def _configure_winapi(ctypes, wt):
+    """Declare pointer-sized Windows signatures before calling any API."""
+    kernel32 = ctypes.windll.kernel32
+    user32 = ctypes.windll.user32
+    kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, wt.BOOL, wt.LPCWSTR)
+    kernel32.CreateMutexW.restype = wt.HANDLE
+    kernel32.CloseHandle.argtypes = (wt.HANDLE,)
+    kernel32.CloseHandle.restype = wt.BOOL
+    kernel32.OpenProcess.argtypes = (wt.DWORD, wt.BOOL, wt.DWORD)
+    kernel32.OpenProcess.restype = wt.HANDLE
+    kernel32.QueryFullProcessImageNameW.argtypes = (
+        wt.HANDLE, wt.DWORD, wt.LPWSTR, ctypes.POINTER(wt.DWORD)
+    )
+    kernel32.QueryFullProcessImageNameW.restype = wt.BOOL
+    kernel32.GetTickCount.argtypes = ()
+    kernel32.GetTickCount.restype = wt.DWORD
+    user32.GetForegroundWindow.argtypes = ()
+    user32.GetForegroundWindow.restype = wt.HWND
+    user32.GetWindowTextLengthW.argtypes = (wt.HWND,)
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
+    user32.GetWindowTextW.argtypes = (wt.HWND, wt.LPWSTR, ctypes.c_int)
+    user32.GetWindowTextW.restype = ctypes.c_int
+    user32.GetWindowThreadProcessId.argtypes = (wt.HWND, ctypes.POINTER(wt.DWORD))
+    user32.GetWindowThreadProcessId.restype = wt.DWORD
+    user32.GetLastInputInfo.argtypes = (ctypes.c_void_p,)
+    user32.GetLastInputInfo.restype = wt.BOOL
+
+
 def acquire_instance_mutex():
     """Hold the single-instance mutex, or return None if another watcher has it.
     The handle dies with the process, so a crash cannot wedge the lock."""
     ctypes, _wt = _win()
+    _configure_winapi(ctypes, _wt)
     handle = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
     if ctypes.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
         if handle:
@@ -310,6 +339,7 @@ def acquire_instance_mutex():
 def watcher_running():
     """Is some watcher holding the mutex? (Probe and release without disturbing it.)"""
     ctypes, _wt = _win()
+    _configure_winapi(ctypes, _wt)
     handle = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
     exists = ctypes.GetLastError() == 183
     if handle:
@@ -320,6 +350,7 @@ def watcher_running():
 def foreground_sample():
     """(exe_basename, window_title) of the focused window; ('', '') when none."""
     ctypes, wt = _win()
+    _configure_winapi(ctypes, wt)
     user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
     hwnd = user32.GetForegroundWindow()
     if not hwnd:
@@ -344,6 +375,7 @@ def foreground_sample():
 def idle_seconds():
     """Seconds since the last keyboard/mouse input, machine-wide."""
     ctypes, wt = _win()
+    _configure_winapi(ctypes, wt)
 
     class LASTINPUTINFO(ctypes.Structure):
         _fields_ = [("cbSize", wt.UINT), ("dwTime", wt.DWORD)]
