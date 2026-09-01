@@ -956,6 +956,54 @@ class TestQuickAdd(VaultTestCase):
         self.assertIn(tracker.BAR_CHAR, text)
         text.encode("ascii")
 
+    def test_numbers_pane_shows_the_application_pipeline(self):
+        self.write_daily(
+            "2026-08-31",
+            "## Log\n"
+            "- [x] type:: application | when:: 2026-08-31T09:00 | stage:: applied\n"
+            "- [x] type:: application | when:: 2026-08-31T09:05 | stage:: applied\n"
+            "- [x] type:: interview | when:: 2026-08-31T10:00 | stage:: oa\n",
+        )
+        text = "\n".join(
+            self.quickadd.numbers_lines(self.vault, weeks=2, today=date(2026, 8, 31))
+        )
+        self.assertIn("application pipeline", text)
+        self.assertIn("applied", text)
+        self.assertIn("50%", text)  # conversion from applied to oa
+
+    def test_suggest_tab_scans_and_applies_through_the_normal_writer(self):
+        history = os.path.join(self.vault, "History")
+        conn = sqlite3.connect(history)
+        when = datetime.now() - timedelta(hours=1)
+        offset = datetime.now() - datetime.utcnow()
+        stamp = int(((when - offset) - __import__("suggest").CHROMIUM_EPOCH).total_seconds() * 1e6)
+        with conn:
+            conn.execute("CREATE TABLE urls (id INTEGER PRIMARY KEY, url TEXT, title TEXT)")
+            conn.execute("CREATE TABLE visits (id INTEGER PRIMARY KEY, url INTEGER, visit_time INTEGER)")
+            conn.execute("INSERT INTO urls VALUES (1,'https://leetcode.com/problems/two-sum/','Two Sum')")
+            conn.execute("INSERT INTO visits VALUES (1,1,?)", (stamp,))
+        conn.close()
+        os.environ["TRACKER_BROWSERS"] = history
+        self.addCleanup(os.environ.pop, "TRACKER_BROWSERS", None)
+
+        found = self.quickadd.scan_suggestions(self.vault, 3)
+        self.assertEqual([p["detail"] for p in found], ["two-sum"])
+
+        ok, message = self.quickadd.apply_suggestions(self.vault, found, "medium")
+        self.assertTrue(ok, message)
+        events, _ = tracker.load_events(self.vault)
+        self.assertEqual(events[0]["diff"], "medium")
+        self.assertEqual(events[0]["src"], "suggest")
+
+        # And the same scan proposes nothing the second time.
+        self.assertEqual(self.quickadd.scan_suggestions(self.vault, 3), [])
+
+    def test_applying_nothing_is_reported_not_written(self):
+        ok, message = self.quickadd.apply_suggestions(self.vault, [], "")
+        self.assertFalse(ok)
+        self.assertIn("nothing selected", message)
+        self.assertFalse(os.path.exists(os.path.join(self.vault, "daily")))
+
     def test_numbers_pane_on_an_empty_vault_does_not_blow_up(self):
         lines = self.quickadd.numbers_lines(self.vault, weeks=4, today=date(2026, 8, 31))
         self.assertTrue(lines)

@@ -172,6 +172,18 @@ typed by hand.
   than the precision. Application stages (OA, phone, onsite) live in email and stay
   manual for the same reason.
 
+## Phase 7 — make it start — **shipped**
+
+The project was complete and unused: nothing in the repo created a vault, so
+`VAULT_PATH` was unset and every command failed on a machine that had just cloned it.
+
+- **`t setup [path]`** builds the vault, seeds the template and a starter `topics.txt`,
+  and prints the PowerShell block with real paths. `--profile` appends it once.
+  Non-destructive by rule: your files and your profile are never rewritten.
+- **Suggest tab in the window**, so the no-typing path does not require a terminal.
+- **Application pipeline in the Numbers pane** — apps → OA → phone → onsite, with
+  conversion, which is the number the job hunt actually turns on.
+
 ## Definition of "solid" (the quality bar per phase)
 
 1. **Data outlives the tool**: everything remains grep-able Markdown a human can read

@@ -11,13 +11,16 @@ Run it with pythonw so no console flashes:  pythonw quickadd.py
 import contextlib
 import io
 import os
+import queue
 import sys
+import threading
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 from argparse import Namespace
-from datetime import timedelta
+from datetime import datetime, timedelta
 
+import suggest
 import tracker
 
 WINDOW_TITLE = "log"
@@ -91,6 +94,11 @@ def numbers_lines(vault, weeks=NUMBERS_WEEKS, today=None):
         lines += ["", "study minutes by topic (%d days)" % NUMBERS_TOPIC_DAYS]
         lines += tracker.render_table(*topics)
 
+    pipeline = tracker.pipeline_report(events)
+    if pipeline:
+        lines += ["", "application pipeline (all time)"]
+        lines += tracker.render_table(*pipeline)
+
     lines += ["", "streaks"] + tracker.streak_lines(events, today)
     return lines
 
@@ -137,6 +145,35 @@ def undo_last():
     return run_tracker(tracker.cmd_undo, date=None, yes=True)
 
 
+def scan_suggestions(vault, days):
+    """Proposals not already in the vault. Safe to call off the main thread: it
+    reads copies of history files and touches no widget."""
+    since = datetime.now() - timedelta(days=days)
+    with contextlib.redirect_stderr(io.StringIO()):
+        found = suggest.gather(since)
+        return suggest.already_logged(vault, found)
+
+
+def apply_suggestions(vault, picked, difficulty=""):
+    """Write picked proposals through the normal writer. Returns (ok, message)."""
+    if not picked:
+        return False, "nothing selected"
+    if difficulty:
+        for proposal in picked:
+            if proposal["type"] == "leetcode":
+                proposal["extras"] = [
+                    pair for pair in proposal["extras"] if pair[0] != "diff"
+                ] + [("diff", difficulty)]
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            added, skipped = tracker.append_commit_lines(
+                vault, suggest.to_log_lines(picked), False
+            )
+    except OSError as exc:
+        return False, str(exc)
+    return True, "logged %d event(s); %d already there" % (added, skipped)
+
+
 # ---- the window ------------------------------------------------------------
 
 
@@ -158,13 +195,14 @@ class QuickAdd(ttk.Frame):
 
         self.tabs = ttk.Notebook(self)
         self.tabs.grid(row=0, column=0, sticky="nsew")
-        log_tab, numbers_tab = ttk.Frame(self.tabs, padding=8), ttk.Frame(self.tabs, padding=8)
-        self.tabs.add(log_tab, text="Log")
-        self.tabs.add(numbers_tab, text="Numbers")
+        tab_frames = [ttk.Frame(self.tabs, padding=8) for _ in range(3)]
+        for frame, label in zip(tab_frames, ("Log", "Numbers", "Suggest")):
+            self.tabs.add(frame, text=label)
         self.tabs.bind("<<NotebookTabChanged>>", lambda _e: self.refresh_numbers())
 
-        self.build_log_tab(log_tab)
-        self.build_numbers_tab(numbers_tab)
+        self.build_log_tab(tab_frames[0])
+        self.build_numbers_tab(tab_frames[1])
+        self.build_suggest_tab(tab_frames[2])
 
         master.bind("<Return>", lambda _e: self.on_log())
         master.bind("<KP_Enter>", lambda _e: self.on_log())
@@ -236,6 +274,46 @@ class QuickAdd(ttk.Frame):
         ttk.Button(parent, text="Write Dashboard.md", command=self.on_dash).grid(
             row=1, column=0, columnspan=2, sticky="e", pady=(8, 0)
         )
+
+    def build_suggest_tab(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(2, weight=1)
+        self.proposals = []
+
+        controls = ttk.Frame(parent)
+        controls.grid(row=0, column=0, sticky="ew")
+        ttk.Label(controls, text="scan the last").grid(row=0, column=0)
+        self.days_var = tk.StringVar(value=str(suggest.DEFAULT_DAYS))
+        ttk.Spinbox(controls, from_=1, to=90, width=4, textvariable=self.days_var).grid(
+            row=0, column=1, padx=4
+        )
+        ttk.Label(controls, text="days of browser history").grid(row=0, column=2)
+        self.scan_button = ttk.Button(controls, text="Scan", command=self.on_scan)
+        self.scan_button.grid(row=0, column=3, padx=(12, 0))
+
+        ttk.Label(
+            parent,
+            # The same warning the CLI prints, for the same reason.
+            text="A page you opened is not a problem you solved or a job you applied to.",
+            foreground="grey",
+        ).grid(row=1, column=0, sticky="w", pady=(8, 4))
+
+        self.suggest_list = tk.Listbox(
+            parent, selectmode="extended", height=10,
+            font=tkfont.nametofont("TkFixedFont"), activestyle="none",
+        )
+        self.suggest_list.grid(row=2, column=0, sticky="nsew")
+
+        actions = ttk.Frame(parent)
+        actions.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        actions.columnconfigure(3, weight=1)
+        ttk.Label(actions, text="difficulty for picked leetcode").grid(row=0, column=0)
+        self.diff_var = tk.StringVar(value="")
+        ttk.Combobox(
+            actions, textvariable=self.diff_var, width=8, state="readonly",
+            values=["", "easy", "medium", "hard"],
+        ).grid(row=0, column=1, padx=(4, 0))
+        ttk.Button(actions, text="Log selected", command=self.on_apply).grid(row=0, column=4)
 
     def entry(self, parent, row, column, width=None, columnspan=1):
         widget = ttk.Entry(parent, width=width) if width else ttk.Entry(parent)
@@ -323,6 +401,72 @@ class QuickAdd(ttk.Frame):
             return
         ok, message = undo_last()
         self.say(message or ("removed" if ok else "nothing to undo"), ok=ok)
+        self.refresh()
+
+    def on_scan(self):
+        """Reading 20-odd history files takes seconds, so it happens off the main
+        thread. The worker only puts its result on a queue -- Tk is not thread-safe,
+        and even scheduling with after() from another thread reaches into the Tcl
+        interpreter from the wrong one. Every widget call stays on the main thread,
+        which polls."""
+        try:
+            days = max(1, int(self.days_var.get()))
+        except ValueError:
+            self.say("days must be a whole number", ok=False)
+            return
+
+        self.scan_button.configure(state="disabled")
+        self.say("scanning %d days of history..." % days)
+        self.suggest_list.delete(0, "end")
+
+        results = queue.Queue()
+
+        def work():
+            try:
+                results.put((scan_suggestions(self.vault, days), None))
+            except Exception as exc:  # a scan must never take the window down
+                results.put(([], str(exc)))
+
+        threading.Thread(target=work, daemon=True).start()
+        self.poll_scan(results)
+
+    def poll_scan(self, results):
+        try:
+            found, error = results.get_nowait()
+        except queue.Empty:
+            self.after(100, lambda: self.poll_scan(results))
+            return
+        self.scan_done(found, error)
+
+    def scan_done(self, found, error):
+        self.scan_button.configure(state="normal")
+        self.proposals = found
+        if error:
+            self.say(error, ok=False)
+            return
+        if not found:
+            self.say("nothing new to propose")
+            self.suggest_list.insert("end", "(nothing new)")
+            return
+        for line in suggest.render(found)[1:]:  # drop the header row
+            self.suggest_list.insert("end", line)
+        self.say("%d proposal(s) -- select the ones you actually finished" % len(found))
+
+    def on_apply(self):
+        picked = [
+            self.proposals[i]
+            for i in self.suggest_list.curselection()
+            if i < len(self.proposals)
+        ]
+        ok, message = apply_suggestions(self.vault, picked, self.diff_var.get())
+        self.say(message, ok=ok)
+        if not ok:
+            return
+        # Applied rows are logged now, so drop them rather than offering them twice.
+        for index in sorted(self.suggest_list.curselection(), reverse=True):
+            self.suggest_list.delete(index)
+            if index < len(self.proposals):
+                self.proposals.pop(index)
         self.refresh()
 
     def on_dash(self):

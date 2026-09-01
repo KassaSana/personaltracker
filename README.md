@@ -4,6 +4,16 @@ CLI that logs completed work into an Obsidian vault as plain Markdown. One file,
 
 ## Setup
 
+One command:
+
+```powershell
+python tracker.py setup "D:\path\to\vault"
+```
+
+It creates the vault layout (`daily/`, `reviews/`, `templates/Daily.md`, `topics.txt`), never overwriting anything you already have, then prints the PowerShell block with your real paths filled in — `VAULT_PATH`, a `TRACKER_REPOS` list discovered from the repos next to this project, the `t` function and tab completion. Add `--profile` to append it to your profile for you (once; your profile is otherwise left alone).
+
+Everything below is what that block sets up, if you'd rather do it by hand.
+
 Point `VAULT_PATH` at your vault (never hardcoded):
 
 ```powershell
@@ -86,10 +96,11 @@ t gui                      # from a terminal
 pythonw quickadd.py        # no console window at all
 ```
 
-Two tabs, Ctrl+Tab between them:
+Three tabs, Ctrl+Tab between them:
 
 - **Log** — type, detail, extras (and topic/duration, enabled only for `study`), the last eight events of the day, and an Undo button. Enter logs, Esc closes.
-- **Numbers** — the last six weeks with bars and the trend column, study minutes by topic, and streaks. Same engine as `t stats --weeks N`, so the window and the terminal can never disagree. It recomputes when you open the tab and after anything you log, not on every keystroke. A button there writes `Dashboard.md` without a terminal.
+- **Numbers** — the last six weeks with bars and the trend column, study minutes by topic, the application pipeline, and streaks. Same engine as `t stats --weeks N`, so the window and the terminal can never disagree. It recomputes when you open the tab and after anything you log, not on every keystroke. A button there writes `Dashboard.md` without a terminal.
+- **Suggest** — `t suggest` with checkboxes instead of a prompt. Scan N days, select the rows you actually finished, optionally set a difficulty for the picked leetcode rows, and log them. The scan runs off the main thread so the window stays responsive while it reads your history.
 
 Tkinter, so it needs nothing that isn't already in the standard library.
 
