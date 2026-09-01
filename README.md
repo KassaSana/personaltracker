@@ -27,6 +27,14 @@ $env:VAULT_PATH = "D:\path\to\vault"
 function t { & "D:\Personal Projects\personaltracker\t.ps1" @args }
 ```
 
+For tab completion of commands, types and flags, dot-source the completer after that function:
+
+```powershell
+. "D:\Personal Projects\personaltracker\completion.ps1"
+```
+
+Its word list comes from `t complete`, which reads the argument parser itself — a new flag is completable the day it's added, with no second list to maintain.
+
 Then `t commit "fixed onnx flag"` works from any directory. A bare event type implies `track`, so `t <type> ...` and `t stats` / `t today` / `t undo` / `t label` all work.
 
 ## Commands

@@ -30,7 +30,8 @@ VALID_TYPES = (
 )
 
 SUBCOMMANDS = (
-    "track", "today", "undo", "stats", "week", "month", "dash", "sync", "review", "label",
+    "track", "today", "undo", "stats", "week", "month", "dash", "sync", "review",
+    "label", "complete",
 )
 
 # `t week` is `t stats 7` under a name you actually reach for.
@@ -1377,6 +1378,19 @@ def cmd_label(_args):
 # ---- CLI -------------------------------------------------------------------
 
 
+def cmd_complete(args):
+    """Words the shell may offer after `t`. Derived from the parser, never a
+    second list to keep in sync: a new flag is completable the day it exists."""
+    parser = build_parser()
+    sub = parser.tracker_subparsers.get(args.word or "")
+    if sub is None:
+        words = list(SUBCOMMANDS) + list(VALID_TYPES)
+    else:
+        words = [opt for action in sub._actions for opt in action.option_strings]
+    for word in sorted(set(words)):
+        print(word)
+
+
 # Bare `t`: the six lines worth knowing, in the order you reach for them.
 CHEATSHEET = (
     ("log", "t <type> [detail...] [--x k=v]", "t leetcode two-sum --x diff=easy"),
@@ -1485,6 +1499,12 @@ def build_parser():
     label_p = sub.add_parser("label", help="Suggest topic labels for recent notes")
     label_p.set_defaults(func=cmd_label)
 
+    complete_p = sub.add_parser("complete", help="List completion words for the shell")
+    complete_p.add_argument("word", nargs="?", help="Subcommand whose flags to list")
+    complete_p.set_defaults(func=cmd_complete)
+
+    # What the shell completer reads; kept here so there is one source of truth.
+    parser.tracker_subparsers = sub.choices
     return parser
 
 

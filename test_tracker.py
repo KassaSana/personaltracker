@@ -284,6 +284,25 @@ class TestImplicitTrack(VaultTestCase):
         self.assertIn("unknown command or type nonsense", err.getvalue())
         self.assertIn("leetcode", err.getvalue())
 
+    def test_complete_lists_commands_and_types(self):
+        out, _ = self.run_cli("complete")
+        words = out.split()
+        for name in tracker.SUBCOMMANDS + tracker.VALID_TYPES:
+            self.assertIn(name, words)
+
+    def test_complete_lists_the_flags_of_one_command(self):
+        out, _ = self.run_cli("complete", "sync")
+        words = out.split()
+        self.assertIn("--dry-run", words)
+        self.assertIn("--author", words)
+        self.assertNotIn("--pipeline", words)
+
+    def test_complete_falls_back_when_the_word_is_not_a_command(self):
+        for word in ("", "lee", "nonsense"):
+            with self.subTest(word=word):
+                out, _ = self.run_cli("complete", word)
+                self.assertIn("leetcode", out.split())
+
     def test_week_and_month_are_stats_windows(self):
         self.write_daily(
             "2026-08-31", "## Log\n- [x] type:: commit | when:: 2026-08-31T09:00\n"
