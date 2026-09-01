@@ -49,7 +49,7 @@ t stats [7|30] [--weeks N] [--pipeline] [--csv]
 t week   # = t stats 7
 t month  # = t stats 30
 t dash  [--weeks N]
-t sync   [--repo PATH ...] [--root DIR ...] [--days N] [--author EMAIL] [--dry-run]
+t sync   [--repo PATH ...] [--root DIR ...] [--days N] [--author EMAIL] [--dry-run] [--no-dash]
 t review [--week YYYY-MM-DD] [--print]
 t label
 t gui
@@ -85,7 +85,12 @@ t gui                      # from a terminal
 pythonw quickadd.py        # no console window at all
 ```
 
-One window: type, detail, extras (and topic/duration, enabled only for `study`), the last eight events of the day, and an Undo button. Enter logs, Esc closes. Tkinter, so it needs nothing that isn't already in the standard library.
+Two tabs, Ctrl+Tab between them:
+
+- **Log** — type, detail, extras (and topic/duration, enabled only for `study`), the last eight events of the day, and an Undo button. Enter logs, Esc closes.
+- **Numbers** — the last six weeks with bars and the trend column, study minutes by topic, and streaks. Same engine as `t stats --weeks N`, so the window and the terminal can never disagree. It recomputes when you open the tab and after anything you log, not on every keystroke. A button there writes `Dashboard.md` without a terminal.
+
+Tkinter, so it needs nothing that isn't already in the standard library.
 
 It owns no format and touches no file — every write goes through the same `track` and `undo` the CLI uses, so it cannot invent a line shape the parser won't read back.
 
@@ -101,6 +106,8 @@ A ticked box carries no `when::`, which is honest: the tool doesn't know the tim
 - `t stats --pipeline` — application funnel by `stage::` (applied → oa → phone → onsite → offer) with conversion between stages.
 - `t stats --csv` — every event to stdout as CSV, for the day you want a spreadsheet.
 
+Every table carries the same ASCII bars as `Dashboard.md`, scaled to its own largest row — one set of numbers should look like itself wherever you read it.
+
 **Honesty rule:** a week with fewer than 3 logged days reads as `low data`, never as a decline. A drop in the chart should mean a drop in you, not in your logging — watch the `days` column first.
 
 `stats` only prints; it never touches the vault.
@@ -111,6 +118,8 @@ A ticked box carries no `when::`, which is honest: the tool doesn't know the tim
 t dash              # write Stats.md and Dashboard.md, 8 weeks of history
 t dash --weeks 12
 ```
+
+`t sync` runs this for you when it actually imported something, so the numbers you read in Obsidian are never older than your last import. `t sync --no-dash` opts out.
 
 `dash` is the only command that overwrites files in the vault root: `Stats.md` (Dataview queries) and `Dashboard.md` (weekly table, difficulty mix, streaks, pipeline, study minutes by topic). Both carry a generated-file header and are rewritten in full each run — put nothing of your own in them.
 

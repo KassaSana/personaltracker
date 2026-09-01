@@ -463,6 +463,44 @@ class TestNumbers(VaultTestCase):
         for name in tracker.GENERATED_NOTES:
             self.assertFalse(os.path.exists(os.path.join(self.vault, name)), name)
 
+    def test_terminal_weekly_table_carries_the_same_bars_as_the_dashboard(self):
+        self.seed("2026-08-31", "type:: commit | when:: 2026-08-31T09:00")
+        out, _ = self.run_cli("stats", "--weeks", "4")
+        self.assertIn("chart", out.splitlines()[0])
+        self.assertIn(tracker.BAR_CHAR, out)
+        out.encode("ascii")
+
+    def test_study_minutes_are_a_table_with_bars(self):
+        self.seed(
+            "2026-08-31",
+            "type:: study | when:: 2026-08-31T09:00 | topic:: algo | duration:: 30",
+            "type:: study | when:: 2026-08-31T10:00 | topic:: os | duration:: 90",
+        )
+        out, _ = self.run_cli("stats", "30")
+        self.assertIn("topic", out)
+        self.assertIn(tracker.BAR_CHAR * tracker.BAR_WIDTH, out)
+        # Largest first, and the counts are still the counts.
+        self.assertLess(out.index("os"), out.index("algo"))
+        self.assertIn("90", out)
+
+    def test_event_counts_are_a_table_with_bars(self):
+        self.seed(
+            "2026-08-31",
+            "type:: commit | when:: 2026-08-31T09:00",
+            "type:: commit | when:: 2026-08-31T09:30",
+            "type:: leetcode | when:: 2026-08-31T10:00",
+        )
+        out, _ = self.run_cli("stats", "7")
+        self.assertIn("type", out)
+        self.assertIn(tracker.BAR_CHAR * tracker.BAR_WIDTH, out)
+        self.assertLess(out.index("commit"), out.index("leetcode"))
+
+    def test_stats_with_no_study_still_says_none(self):
+        self.seed("2026-08-31", "type:: commit | when:: 2026-08-31T09:00")
+        out, _ = self.run_cli("stats", "7")
+        self.assertIn("study minutes", out)
+        self.assertIn("(none)", out)
+
     def test_dash_rejects_a_bad_window(self):
         with self.assertRaises(SystemExit):
             self.run_cli("dash", "--weeks", "0")
@@ -651,6 +689,25 @@ class TestSync(VaultTestCase):
         out, _ = self.sync("--days", "3650", "--dry-run")
         self.assertIn("would add 1 event(s)", out)
         self.assertFalse(os.path.exists(self.daily("2026-08-31")))
+
+    def test_sync_refreshes_the_generated_notes(self):
+        self.fake_git(git_log_output((("a" * 40), "2026-08-31T14:22:00", "one")))
+        out, _ = self.sync("--days", "3650")
+        for name in tracker.GENERATED_NOTES:
+            self.assertTrue(os.path.isfile(os.path.join(self.vault, name)), name)
+            self.assertIn(name, out)
+        self.assertIn("added 1 event(s)", out)
+        self.assertIn("| commit |", tracker.read_text(os.path.join(self.vault, "Dashboard.md")))
+
+    def test_sync_leaves_the_notes_alone_when_nothing_landed(self):
+        # Nothing new means nothing to redraw -- and a dry run never writes at all.
+        self.fake_git(git_log_output((("a" * 40), "2026-08-31T14:22:00", "one")))
+        self.sync("--days", "3650", "--dry-run")
+        self.assertFalse(os.path.exists(os.path.join(self.vault, "Dashboard.md")))
+        self.sync("--days", "3650", "--no-dash")
+        self.assertFalse(os.path.exists(os.path.join(self.vault, "Dashboard.md")))
+        self.sync("--days", "3650")  # second real sync: everything already logged
+        self.assertFalse(os.path.exists(os.path.join(self.vault, "Dashboard.md")))
 
     def test_unreadable_repo_warns_and_is_not_fatal(self):
         self.patch(tracker.shutil, "which", lambda _name: "git")
@@ -877,6 +934,38 @@ class TestQuickAdd(VaultTestCase):
         self.assertIn("leetcode", lines[0])
         self.assertIn("two-sum", lines[0])
         self.assertIn("diff=easy", lines[0])
+
+    def test_numbers_pane_reports_the_same_engine_as_the_cli(self):
+        for day in ("2026-08-31", "2026-08-30"):
+            self.write_daily(
+                day,
+                "## Log\n- [x] type:: leetcode | when:: %sT09:00 | diff:: easy\n"
+                "- [x] type:: study | when:: %sT10:00 | topic:: algo | duration:: 30\n"
+                % (day, day),
+            )
+        lines = self.quickadd.numbers_lines(self.vault, weeks=4, today=date(2026, 8, 31))
+        text = "\n".join(lines)
+        self.assertIn("week", lines[0])
+        self.assertIn("chart", lines[0])
+        self.assertIn("2026-08-31", text)   # this week's bucket
+        self.assertIn("streaks", text)
+        self.assertIn("study minutes by topic", text)
+        self.assertIn("algo", text)
+        self.assertIn(tracker.BAR_CHAR, text)
+        text.encode("ascii")
+
+    def test_numbers_pane_on_an_empty_vault_does_not_blow_up(self):
+        lines = self.quickadd.numbers_lines(self.vault, weeks=4, today=date(2026, 8, 31))
+        self.assertTrue(lines)
+        self.assertIn("streaks", "\n".join(lines))
+
+    def test_numbers_pane_swallows_warnings_it_cannot_print(self):
+        # Under pythonw there is no stderr; a corrupt line must not reach one.
+        self.write_daily("2026-08-31", "## Log\n- [x] no fields here\n")
+        err = StringIO()
+        with contextlib.redirect_stderr(err):
+            self.quickadd.numbers_lines(self.vault, weeks=2, today=date(2026, 8, 31))
+        self.assertEqual(err.getvalue(), "")
 
     def test_format_event_survives_a_line_with_no_when(self):
         # A box ticked in Obsidian carries no time; the window must still show it.

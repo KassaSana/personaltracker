@@ -130,9 +130,15 @@ Not new numbers; the same numbers with less friction between you and them.
   `- [ ] type:: ...` boxes. Ticking one in Obsidian *is* logging: no terminal,
   works on mobile, no new code path (the parser only ever counted `- [x]`).
 - **PowerShell tab completion**, sourced from `t complete`, which walks the parser.
-- **`t gui`** — a tkinter quick-add window (`quickadd.py`), for the 1am case where
-  opening a terminal is the reason the event never gets logged. It owns no format:
-  every write goes through `track` / `undo`.
+- **`t gui`** — a tkinter window (`quickadd.py`) with two tabs: **Log**, for the 1am
+  case where opening a terminal is the reason the event never gets logged, and
+  **Numbers**, the last six weeks with bars, study minutes by topic and streaks.
+  It owns no format and no engine: writes go through `track` / `undo`, numbers come
+  from `weekly_report` / `streak_lines`, so the window cannot disagree with the CLI.
+- **Bars everywhere, not just in the notes** — `t stats` renders the same tables the
+  dashboard does. One set of numbers should look like itself wherever you read it.
+- **`sync` refreshes the generated notes** when it actually imported something, so
+  what Obsidian shows is never older than the last import. `--no-dash` opts out.
 
 Why a window is not a violation of the exclusion list below: it adds no server, no
 dependency, no account, and no state. It is capture, which is the one thing this
