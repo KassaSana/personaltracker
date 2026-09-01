@@ -2,7 +2,7 @@
 
 ## Context
 
-Small CLI that logs completed work as events into an Obsidian vault as plain Markdown (Dataview inline fields). Personal tool, optimized for zero maintenance in a year: Python stdlib only, no server/DB/network in the write path, all state in the Markdown files themselves. Directory is empty greenfield. Python 3.10 available. GitHub/Canvas ingestion explicitly out of scope — do not build it, do not stub it.
+Small CLI that logs completed work as events into an Obsidian vault as plain Markdown (Dataview inline fields). This is the original greenfield specification. ROADMAP.md and AGENTS.md now allow optional dependencies and integrations where they improve automatic capture; the durable Markdown and append-only rules remain authoritative.
 
 ## Shape
 
