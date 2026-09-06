@@ -43,7 +43,8 @@ WINDOW_TITLE = "Personal Tracker"
 TODAY_LINES = 8
 # Study is the only type with a topic and a duration; the fields follow the type.
 STUDY_ONLY = ("topic", "duration")
-TAB_NAMES = ("Recap", "Log", "Numbers")
+LIVE_TAB = "Live"
+TAB_NAMES = ("Recap", "Log", "Numbers", LIVE_TAB)
 # Keep generated and rare types available in the CLI without making the quick-add
 # dropdown ask about them every time.
 MANUAL_TYPES = (
@@ -54,6 +55,11 @@ MANUAL_TYPES = (
 # Numbers pane: enough weeks to see a trend, few enough to read at a glance.
 NUMBERS_WEEKS = 6
 NUMBERS_TOPIC_DAYS = 30
+
+THEMES = {
+    "light": {"bg": "#f4f4f4", "fg": "#202124", "field": "#ffffff", "select": "#cfe3ff"},
+    "dark": {"bg": "#202124", "fg": "#f1f3f4", "field": "#303134", "select": "#475569"},
+}
 
 
 # ---- pure logic (no Tk; this is the part worth testing) ---------------------
@@ -221,14 +227,23 @@ class QuickAdd(ttk.Frame):
         master.columnconfigure(0, weight=1)
         master.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+        self.text_widgets = []
+        self.list_widgets = []
+        self.dark_mode = False
+
+        topbar = ttk.Frame(self)
+        topbar.grid(row=0, column=0, sticky="ew")
+        topbar.columnconfigure(0, weight=1)
+        self.theme_button = ttk.Button(topbar, command=self.toggle_theme)
+        self.theme_button.grid(row=0, column=1, sticky="e")
 
         # One status line under both tabs: every action reports in the same place.
         self.status = ttk.Label(self, text="", foreground="grey")
-        self.status.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.status.grid(row=2, column=0, sticky="w", pady=(6, 0))
 
         self.tabs = ttk.Notebook(self)
-        self.tabs.grid(row=0, column=0, sticky="nsew")
+        self.tabs.grid(row=1, column=0, sticky="nsew")
         tab_frames = [ttk.Frame(self.tabs, padding=8) for _ in TAB_NAMES]
         for frame, label in zip(tab_frames, TAB_NAMES):
             self.tabs.add(frame, text=label)
@@ -237,6 +252,7 @@ class QuickAdd(ttk.Frame):
         self.build_suggest_tab(tab_frames[0])
         self.build_log_tab(tab_frames[1])
         self.build_numbers_tab(tab_frames[2])
+        self.build_live_tab(tab_frames[3])
 
         master.bind("<Return>", self.on_enter)
         master.bind("<KP_Enter>", self.on_enter)
@@ -244,8 +260,10 @@ class QuickAdd(ttk.Frame):
         master.bind("<Control-Tab>", lambda _e: self.next_tab())
 
         self.sync_study_fields()
+        self.apply_theme()
         self.refresh()
         self.on_scan()
+        self.tick_live()
 
     # -- layout --
 
@@ -288,6 +306,7 @@ class QuickAdd(ttk.Frame):
         self.toggle_advanced_fields()
 
         self.today = tk.Listbox(parent, height=TODAY_LINES, activestyle="none")
+        self.list_widgets.append(self.today)
         self.today.grid(row=3, column=0, columnspan=6, sticky="nsew", pady=(10, 0))
 
         buttons = ttk.Frame(parent)
@@ -310,8 +329,8 @@ class QuickAdd(ttk.Frame):
             wrap="none",
             state="disabled",
             borderwidth=0,
-            background=parent.winfo_toplevel().cget("background"),
         )
+        self.text_widgets.append(self.numbers)
         self.numbers.grid(row=0, column=0, sticky="nsew")
         bar = ttk.Scrollbar(parent, orient="vertical", command=self.numbers.yview)
         bar.grid(row=0, column=1, sticky="ns")
@@ -319,6 +338,28 @@ class QuickAdd(ttk.Frame):
 
         ttk.Button(parent, text="Write Dashboard.md", command=self.on_dash).grid(
             row=1, column=0, columnspan=2, sticky="e", pady=(8, 0)
+        )
+
+    def build_live_tab(self, parent):
+        """Show the watcher's current classification without storing raw titles."""
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(2, weight=1)
+        ttk.Label(parent, text="What Personal Tracker currently sees").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(
+            parent,
+            text="Only the category is recorded in your vault; window titles and URLs are discarded.",
+            foreground="grey",
+        ).grid(row=1, column=0, sticky="w", pady=(4, 10))
+        self.live_summary = tk.Text(
+            parent, height=8, width=52, font=tkfont.nametofont("TkFixedFont"),
+            wrap="word", state="disabled", borderwidth=0,
+        )
+        self.live_summary.grid(row=2, column=0, sticky="nsew")
+        self.text_widgets.append(self.live_summary)
+        ttk.Button(parent, text="Refresh now", command=self.refresh_live).grid(
+            row=3, column=0, sticky="e", pady=(8, 0)
         )
 
     def build_suggest_tab(self, parent):
@@ -355,6 +396,7 @@ class QuickAdd(ttk.Frame):
             parent, selectmode="extended", height=10,
             font=tkfont.nametofont("TkFixedFont"), activestyle="none",
         )
+        self.list_widgets.append(self.suggest_list)
         self.suggest_list.grid(row=3, column=0, sticky="nsew")
 
         actions = ttk.Frame(parent)
@@ -416,6 +458,39 @@ class QuickAdd(ttk.Frame):
     def say(self, text, ok=True):
         self.status.configure(text=text, foreground="grey" if ok else "firebrick")
 
+    def toggle_theme(self):
+        self.dark_mode = not self.dark_mode
+        self.apply_theme()
+
+    def apply_theme(self):
+        """Apply the light/dark theme to ttk and classic Tk widgets."""
+        theme = THEMES["dark" if self.dark_mode else "light"]
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure("TFrame", background=theme["bg"])
+        style.configure("TLabel", background=theme["bg"], foreground=theme["fg"])
+        style.configure("TButton", background=theme["bg"], foreground=theme["fg"])
+        style.configure("TCheckbutton", background=theme["bg"], foreground=theme["fg"])
+        style.configure("TNotebook", background=theme["bg"])
+        style.configure("TNotebook.Tab", background=theme["bg"], foreground=theme["fg"])
+        style.configure("TEntry", fieldbackground=theme["field"], foreground=theme["fg"])
+        style.configure("TCombobox", fieldbackground=theme["field"], foreground=theme["fg"])
+        self.winfo_toplevel().configure(background=theme["bg"])
+        self.theme_button.configure(text="Light mode" if self.dark_mode else "Dark mode")
+        for widget in self.text_widgets:
+            widget.configure(
+                background=theme["field"], foreground=theme["fg"],
+                insertbackground=theme["fg"], selectbackground=theme["select"],
+            )
+        for widget in self.list_widgets:
+            widget.configure(
+                background=theme["field"], foreground=theme["fg"],
+                selectbackground=theme["select"], selectforeground=theme["fg"],
+            )
+
     def refresh(self):
         self.today.delete(0, "end")
         lines = today_lines(self.vault, tracker.working_date())
@@ -427,8 +502,11 @@ class QuickAdd(ttk.Frame):
         if self.showing_numbers():
             self.refresh_numbers()
 
+    def current_tab(self):
+        return str(self.tabs.tab(self.tabs.select(), "text"))
+
     def showing_numbers(self):
-        return is_numbers_tab(str(self.tabs.tab(self.tabs.select(), "text")))
+        return is_numbers_tab(self.current_tab())
 
     def refresh_numbers(self):
         """Recompute on demand only: reading every note is too much work to do on
@@ -440,6 +518,43 @@ class QuickAdd(ttk.Frame):
         self.numbers.insert("1.0", "\n".join(numbers_lines(self.vault)))
         self.numbers.configure(state="disabled")
         self.numbers_stale = False
+
+    def refresh_live(self):
+        """Redraw the live pane once from the current foreground window."""
+        try:
+            running = watch.watcher_running()
+            exe, title = watch.foreground_sample()
+            pattern, category = watch.matched_rule(exe, title, watch.load_rules(self.vault))
+            idle = watch.idle_seconds()
+            lines = [
+                "watcher process: %s" % ("running" if running else "not running"),
+                "foreground app:   %s" % (exe or "(none)"),
+                "category:         %s" % (category or "ignored (no matching rule)"),
+                "matched signal:   %s" % (pattern or "(none)"),
+                "idle:             %ds" % round(idle),
+                "checked:          %s" % datetime.now().strftime("%H:%M:%S"),
+            ]
+        except (OSError, AttributeError, ImportError) as exc:
+            lines = [
+                "Live activity is available on Windows while the watcher is running.",
+                "Could not read the foreground window: %s" % exc,
+            ]
+        self.live_summary.configure(state="normal")
+        self.live_summary.delete("1.0", "end")
+        self.live_summary.insert("1.0", "\n".join(lines))
+        self.live_summary.configure(state="disabled")
+
+    def tick_live(self):
+        """Re-arm the live poll; only a visible pane does the work.
+
+        A sample costs four Win32 calls and a read of watch-rules.txt, and
+        the tab is hidden most of the time -- `refresh_numbers` guards itself
+        for the same reason. Keeping the timer here also means the Refresh
+        button can call `refresh_live` without forking a second chain.
+        """
+        if self.current_tab() == LIVE_TAB:
+            self.refresh_live()
+        self.after(2000, self.tick_live)
 
     def on_log(self):
         ok, message = log_event(

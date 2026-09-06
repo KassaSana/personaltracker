@@ -6,9 +6,8 @@ minutes only. Window titles and exe names are used in memory to classify a sampl
 and then discarded: **nothing but the category name ever reaches disk**, which is
 what makes a watcher acceptable in a vault that syncs.
 
-Time is attention, not accomplishment, so `time` events are excluded from every
-count, streak and trend in tracker.py -- they feed the time tables only. A decline
-in the chart must still mean a decline in you.
+Time is attention rather than accomplishment, so `time` events use separate tables
+and do not enter completion counts or streaks.
 
 Windows-only by nature (ctypes on user32/kernel32); still stdlib, still no network.
 """
@@ -32,6 +31,8 @@ RULES_NAME = "watch-rules.txt"
 # "exe|title", first match wins. watch-rules.txt in the vault is consulted first,
 # so a user line can reroute anything here.
 DEFAULT_RULES = (
+    ("palworld", "gaming"),
+    ("steam", "gaming"),
     ("codesignal", "interview-prep"),
     ("leetcode", "leetcode"),
     ("powerpnt.exe", "reading"),
@@ -62,6 +63,7 @@ DEFAULT_RULES = (
 )
 
 OTHER_CATEGORY = "other"
+BROWSER_EXES = ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe")
 
 # Pair a watched category with the completion count that gives the hours meaning.
 TIME_DONE_TYPES = {
@@ -184,12 +186,27 @@ def rule_lines(vault):
     return lines
 
 
-def classify(exe, title, user_rules=()):
-    """Category for one sample. User rules first, then defaults, else `other`."""
+def matched_rule(exe, title, user_rules=()):
+    """Return the matched pattern and category, without exposing the raw title."""
     haystack = ("%s|%s" % (exe, title)).lower()
     for pattern, category in tuple(user_rules) + DEFAULT_RULES:
         if pattern in haystack:
-            return category
+            return pattern, category
+    return None, None
+
+
+def classify(exe, title, user_rules=()):
+    """Category for one sample.
+
+    Known browser pages are categorized by the rules above. A browser with no
+    matching page is ignored so an untouched tab does not become work time.
+    Unknown non-browser windows remain ``other`` for visibility.
+    """
+    _pattern, category = matched_rule(exe, title, user_rules)
+    if category:
+        return category
+    if exe.lower() in BROWSER_EXES:
+        return None
     return OTHER_CATEGORY
 
 

@@ -205,12 +205,26 @@ def run_schtasks(argv):
     return proc.returncode == 0, output
 
 
+def persist_vault_env(target):
+    """Persist VAULT_PATH into the Windows user environment.
+
+    Neither a scheduled task nor an Explorer-launched shortcut ever loads the
+    PowerShell profile, so both need the value here. One owner for that write:
+    install_shortcut.ps1 asks for it through `t setup --persist-env` rather
+    than setting the variable itself.
+    """
+    try:
+        subprocess.run(["setx", "VAULT_PATH", target], capture_output=True, timeout=30)
+    except OSError:
+        print("warning: could not persist VAULT_PATH with setx", file=sys.stderr)
+
+
 def watch_task(target, remove):
     """Register (or remove) the at-login Task Scheduler job for `t watch`.
 
-    A scheduled task never sees the PowerShell profile, so VAULT_PATH is also
-    persisted into the user environment with setx -- the same value the profile
-    block sets, from the same setup target.
+    A scheduled task never sees the PowerShell profile, so the target is also
+    persisted into the user environment -- the same value the profile block
+    sets, from the same setup target.
     """
     if remove:
         ok, output = run_schtasks(["/Delete", "/TN", WATCH_TASK_NAME, "/F"])
@@ -228,10 +242,7 @@ def watch_task(target, remove):
     if not ok:
         print("could not register task: %s" % output)
         return 1
-    try:
-        subprocess.run(["setx", "VAULT_PATH", target], capture_output=True, timeout=30)
-    except OSError:
-        print("warning: could not persist VAULT_PATH with setx", file=sys.stderr)
+    persist_vault_env(target)
     run_schtasks(["/Run", "/TN", WATCH_TASK_NAME])
     print("registered %s: `t watch` starts at login (and was started now)" % WATCH_TASK_NAME)
     print("undo with:  t setup --watch-task --remove")
@@ -253,6 +264,10 @@ def cmd_setup(args):
         print("  created %s" % name)
     if not created:
         print("  everything was already there; nothing changed")
+
+    if args.persist_env:
+        persist_vault_env(target)
+        print("  saved VAULT_PATH for your Windows user")
 
     repos = os.environ.get("TRACKER_REPOS") or guess_repos()
     block = profile_block(target, repos)

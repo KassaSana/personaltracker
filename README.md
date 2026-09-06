@@ -84,17 +84,44 @@ three short prompts. It never regenerates the note after you write in it.
 t gui
 ```
 
-The small Tkinter window has three tabs:
+The small Tkinter window has four tabs:
 
 - **Recap** collects evidence and learning.
 - **Log** exposes common manual types; generic `key=value` fields are hidden
   behind **Advanced fields**.
 - **Numbers** shows six weeks, study minutes, focused time, the application
   pipeline, and streaks.
+- **Live** shows the foreground app, its classified category, idle time, and
+  whether `t watch` is running. It refreshes every two seconds; raw window
+  titles and URLs are never written to the vault.
+  It also shows a safe matched signal, such as `leetcode` or `canvas`, to make
+  active Chrome activity easy to distinguish without displaying the full title.
+
+Steam and PAL World are classified as `gaming` by default. Add custom rules to
+the vault's `watch-rules.txt` when an app needs a different category.
+Recognized browser pages are tracked from the active tab; generic Chrome,
+Edge, Firefox, Brave, and Opera windows are ignored so idle tabs do not count.
+
+Use the **Dark mode** button in the upper-right corner to switch the window
+between light and dark mode.
 
 The window uses the same writers and numbers engine as the CLI. Run it with
 `pythonw quickadd.py` or bind that command to a Windows shortcut to avoid a
-console window.
+console window. The CLI works without Tkinter; only `t gui` needs optional Tk
+support.
+
+### One-click Windows shortcut
+
+After Python is installed, open PowerShell in this folder and run:
+
+```powershell
+.\install_shortcut.ps1
+```
+
+The script asks for your Obsidian vault path, creates the vault layout if needed,
+saves `VAULT_PATH` for your Windows user, and creates **Personal Tracker** on
+your desktop. After that, double-clicking the desktop icon opens the window
+without a terminal. Run the script again if the vault location changes.
 
 ## Optional automation
 
@@ -130,6 +157,14 @@ Obsidian counts as logging, including on mobile.
 The working day changes at 04:00. An event logged at 01:30 is filed in the
 previous daily note, while `when::` still records its actual time. Use
 `--date YYYY-MM-DD` to override the filing date.
+
+## Project layout
+
+- `tracker.py` contains the CLI, Markdown I/O, and reports.
+- `sync.py`, `suggest.py`, `watch.py`, and `recap.py` collect optional evidence.
+- `quickadd.py` provides the Tkinter window.
+- `bootstrap.py`, `review.py`, and `label.py` implement their matching commands.
+- `test_tracker.py` is the standard-library test suite.
 
 ## Verify
 

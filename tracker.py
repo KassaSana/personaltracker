@@ -1268,6 +1268,11 @@ def build_parser():
         "--watch-task", action="store_true", help="Register `t watch` to start at login"
     )
     setup_p.add_argument(
+        "--persist-env",
+        action="store_true",
+        help="Save VAULT_PATH in your Windows user environment",
+    )
+    setup_p.add_argument(
         "--remove", action="store_true", help="With --watch-task: unregister it"
     )
     setup_p.set_defaults(func=cmd_setup)
